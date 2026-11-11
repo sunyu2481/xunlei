@@ -200,6 +200,8 @@ func mockEnv(dirData, dirDownload string) []string {
 		"SYNOPKG_DSM_VERSION_MINOR="+SYNOPKG_DSM_VERSION_MINOR,
 		"SYNOPKG_DSM_VERSION_BUILD="+SYNOPKG_DSM_VERSION_BUILD,
 		"DriveListen=unix://"+SOCK_DRIVE_LISTEN,
+		// 内核和网页程序须使用与启动器命令行一致的地址访问认证及版本接口。
+		"LauncherListen=unix://"+SOCK_LAUNCHER_LISTEN,
 		"PLATFORM=群晖",
 		"OS_VERSION="+SYNO_VERSION,
 		"ConfigPath="+dirData,

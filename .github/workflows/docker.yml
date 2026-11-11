@@ -31,6 +31,7 @@ jobs:
         run: |
           build_time=$(date -u +'%Y-%m-%dT%H:%M:%SZ')
           mkdir -p artifacts
+          make -C cmd/authenticate_cgi_go build
           for arch in amd64 arm64; do
             GOARCH="$arch" go build \
               -ldflags="-s -w -X main.BuildTime=${build_time}" \
