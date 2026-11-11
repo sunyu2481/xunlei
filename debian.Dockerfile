@@ -4,7 +4,7 @@ ARG TARGETARCH
 LABEL org.opencontainers.image.authors=cnk3x
 LABEL org.opencontainers.image.source=https://github.com/cnk3x/xunlei
 
-RUN apt update && apt install --no-install-recommends -y ca-certificates tzdata && rm -rf /var/lib/apt/lists/* && \
+RUN apt update && apt install --no-install-recommends -y ca-certificates tzdata iproute2 && rm -rf /var/lib/apt/lists/* && \
   rm -f /etc/localtime /etc/timezone && \
   cp -Lr /usr/share/zoneinfo/Asia/Chongqing /etc/localtime && \
   echo "Asia/Chongqing" >/etc/timezone
@@ -19,7 +19,9 @@ ENV XL_DASHBOARD_PORT=2345 \
   XL_SPK_URL= \
   XL_UID= \
   XL_GID= \
-  XL_DEBUG=
+  XL_DEBUG= \
+  XL_UPLOAD_LIMIT=0 \
+  XL_UPLOAD_INTERFACE=eth0
 
 CMD [ "/xlp" ]
 

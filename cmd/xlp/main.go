@@ -13,6 +13,7 @@ import (
 	"github.com/cnk3x/xunlei"
 	"github.com/cnk3x/xunlei/pkg/flags"
 	"github.com/cnk3x/xunlei/pkg/log"
+	"github.com/cnk3x/xunlei/pkg/netlimit"
 	"github.com/cnk3x/xunlei/pkg/utils"
 	"github.com/cnk3x/xunlei/pkg/vms"
 )
@@ -65,8 +66,23 @@ func main() {
 	slog.InfoContext(ctx, fmt.Sprintf("prevent update: %t", cfg.PreventUpdate))
 	slog.InfoContext(ctx, fmt.Sprintf("log: %s", cfg.Log))
 	slog.InfoContext(ctx, fmt.Sprintf("debug: %t", cfg.Debug))
+	slog.InfoContext(ctx, "上传限速配置", "limit_kib", cfg.UploadLimit, "interface", cfg.UploadInterface)
 
-	err := vms.Execute(
+	undoLimit, err := netlimit.Apply(ctx, cfg.UploadLimit, cfg.UploadInterface)
+	if err != nil {
+		slog.ErrorContext(ctx, "上传限速初始化失败", "err", err)
+		os.Exit(1)
+	}
+	defer func() {
+		if err := undoLimit(); err != nil {
+			slog.WarnContext(ctx, "清理上传限速失败", "err", err)
+		}
+	}()
+	if cfg.UploadLimit > 0 {
+		slog.InfoContext(ctx, "上传限速已生效", "limit_kib", cfg.UploadLimit, "interface", cfg.UploadInterface)
+	}
+
+	err = vms.Execute(
 		log.Prefix(ctx, "vms"),
 		vms.Before(xunlei.Before(cfg)),
 		vms.Run(xunlei.Run(cfg)),

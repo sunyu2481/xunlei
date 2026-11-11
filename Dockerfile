@@ -1,20 +1,25 @@
-FROM --platform=${TARGETARCH} ubuntu:focal
+ARG TARGETARCH
+FROM --platform=linux/${TARGETARCH} ubuntu:focal
 ARG TARGETARCH
 ENV DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update \
-  && apt-get install --no-install-recommends -y ca-certificates tzdata \
+  && apt-get install --no-install-recommends -y ca-certificates tzdata iproute2 \
   && rm -rf /var/lib/apt/lists/* \
   && mkdir -p /rootfs/etc/ssl/certs /rootfs/lib \
   && find /usr/lib \( -name libdl.so.2 -o -name libgcc_s.so.1 -o -name libstdc++.so.6 \) -exec cp -Lr {} /rootfs/lib/ \; \
   && cp -Lr /usr/share/zoneinfo/Asia/Chongqing /rootfs/etc/localtime \
   && echo "Asia/Chongqing" >/rootfs/etc/timezone \
-  && cp -Lr --parents /etc/ssl/certs/ca-certificates.crt /rootfs/
+  && cp -Lr --parents /etc/ssl/certs/ca-certificates.crt /rootfs/ \
+  && mkdir -p /rootfs/sbin \
+  && cp -L /sbin/ip /sbin/tc /rootfs/sbin/ \
+  && ldd /sbin/ip /sbin/tc | awk '$2 == "=>" { print $3 } $1 ~ /^\// && $1 !~ /:$/ { print $1 }' \
+    | sort -u | xargs -r cp -L --parents --target-directory=/rootfs
 
 COPY artifacts/xlp-${TARGETARCH} /rootfs/xlp
 RUN chmod +x /rootfs/xlp
 
-FROM --platform=${TARGETARCH} busybox:1.37
+FROM --platform=linux/${TARGETARCH} busybox:1.37
 ARG TARGETARCH
 
 LABEL org.opencontainers.image.authors=cnk3x \
@@ -33,6 +38,8 @@ ENV \
   XL_UID= \
   XL_GID= \
   XL_DEBUG= \
+  XL_UPLOAD_LIMIT=0 \
+  XL_UPLOAD_INTERFACE=eth0 \
   XL_SPK_URL=
 
 VOLUME [ "/xunlei/data", "/xunlei/var/packages/pan-xunlei-com" ]

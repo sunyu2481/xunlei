@@ -19,7 +19,8 @@
 
 - 支持本地运行和容器化运行
 - 重构了运行环境，有比较完善的回滚流程。
-- 容器镜像基于busybox，不再内嵌SPK，改成从远程下载，大幅减小了镜像体积(50M->5M)。
+- 容器镜像基于busybox，不再内嵌SPK，改成从远程下载，减小镜像体积。
+- 支持通过环境变量限制容器总出站流量。
 - 不再内嵌SPK，不在受镜像包的luncher限制，理论上随时可以使用任何指定的版本。
 
 ## 使用
@@ -56,6 +57,8 @@ OPTIONS:
       --spk string                  SPK 下载链接 [XL_SPK] (default "https://down.sandai.net/nas/nasxunlei-DSM7-x86_64.spk")
   -F, --force_download              强制下载 [XL_SPK_FORCE_DOWNLOAD]
       --launcher_log_file string    迅雷启动器日志文件 [XL_LAUNCHER_LOG_FILE]
+      --upload_limit uint64         容器总出站限速，单位 KiB/s，0 表示不限速 [XL_UPLOAD_LIMIT]
+      --upload_interface string     上传限速使用的容器 veth 网卡 [XL_UPLOAD_INTERFACE] (default "eth0")
       --debug                       是否开启调试日志 [XL_DEBUG]
 ```
 
@@ -93,7 +96,31 @@ XL_UID=0
 XL_GID=0
 # 是否开启调试日志
 XL_DEBUG=false
+# 容器总出站限速，单位 KiB/s，0 表示不限速；启用需要 NET_ADMIN 和桥接网络
+XL_UPLOAD_LIMIT=0
+# 上传限速使用的容器网卡
+XL_UPLOAD_INTERFACE=eth0
 ```
+
+#### 上传限速
+
+封装程序支持对容器网卡的总出站流量限速，覆盖迅雷内核、插件、TCP、UDP 和 IPv6。无需调整迅雷内部配置。默认关闭，设置 `XL_UPLOAD_LIMIT=500` 可将平均出站速度限制为约 500 KiB/s，即 4.1 Mbps；允许短暂突发。
+
+在部署配置中加入以下内容，并重新创建使用本次修改构建的镜像的容器：
+
+```yaml
+cap_add: [SYS_ADMIN, NET_ADMIN]
+network_mode: bridge
+environment:
+  - XL_UPLOAD_LIMIT=500
+  - XL_UPLOAD_INTERFACE=eth0
+```
+
+此功能只支持隔离网络环境中的 `veth` 网卡，适用于默认桥接网络和通常使用桥接驱动的自定义网络，不应在 `network_mode: host` 下启用。程序会拒绝物理网卡和其他类型的网卡。多网卡容器只限制 `XL_UPLOAD_INTERFACE` 指定的网卡；出站流量需经过该网卡。
+
+限速包括面板文件传输、局域网发送和下载确认报文，因此较低的上传限制也可能影响下载速度。程序在准备运行环境前设置限速，正常退出时移除自己添加的队列；已有自定义根队列不会被覆盖。启用限速后，如果权限不足、工具缺失或宿主机内核不支持令牌桶队列，程序会报错并停止启动。
+
+直接运行可使用 `--upload_limit 500 --upload_interface eth0`，但同样要求在独立网络环境中使用 `veth` 网卡，并预先安装 `iproute2`。
 
 #### 示例: docker-compose
 
@@ -109,6 +136,7 @@ services:
 
     # 必须, cap_add: [SYS_ADMIN] 和 privileged: true 二选一
     cap_add: [SYS_ADMIN]
+    # 启用上传限速时改为 cap_add: [SYS_ADMIN, NET_ADMIN]
 
     # 面板访问端口，如需更改访问端口到5432，替换前面的2345为5432即可
     ports: [2345:2345/tcp]
@@ -118,6 +146,10 @@ services:
     # network_mode: host
 
     environment:
+      # 可选，总出站限速，单位 KiB/s；需要 NET_ADMIN 和桥接网络
+      # - XL_UPLOAD_LIMIT=500
+      # - XL_UPLOAD_INTERFACE=eth0
+
       ##如果需要指定多个下载目录，手动指定XL_DIR_DOWNLOAD
       ##多个以冒号`:`隔开，都必须以 /xunlei 开头，迅雷面板选择保存路径显示会去掉/xunlei前缀
       ##指定后可以在 volumes 中绑定宿主机实际目录
