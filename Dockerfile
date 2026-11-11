@@ -10,6 +10,9 @@ RUN apt-get update \
   && mkdir -p /rootfs/etc/ssl/certs /rootfs/lib \
   && ln -s lib /rootfs/lib64 \
   && find /usr/lib \( -name libdl.so.2 -o -name libgcc_s.so.1 -o -name libstdc++.so.6 \) -exec cp -Lr {} /rootfs/lib/ \; \
+  && dpkg-query -L libc6 \
+    | awk '/^\/(lib|lib64|usr\/lib)\/.*\.so(\.[0-9]+)*$/ { print }' \
+    | xargs -r cp -L --parents --target-directory=/rootfs \
   && cp -Lr /usr/share/zoneinfo/Asia/Chongqing /rootfs/etc/localtime \
   && echo "Asia/Chongqing" >/rootfs/etc/timezone \
   && cp -Lr --parents /etc/ssl/certs/ca-certificates.crt /rootfs/ \
