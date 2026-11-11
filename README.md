@@ -29,6 +29,18 @@
 
 #### 镜像
 
+本仓库每次推送代码后，会自动构建 `linux/amd64` 和 `linux/arm64` 镜像并发布到 GitHub 容器仓库。工作流使用内置的 `GITHUB_TOKEN`，无需配置额外密钥，也可在 Actions 页面手动运行。
+
+分支推送生成分支名标签，默认分支还会更新 `latest`；所有构建都会生成 `sha-<短提交号>` 标签，推送 Git 标签时生成对应的镜像标签。镜像地址跟随当前 GitHub 仓库，当前为：
+
+```shell
+docker pull ghcr.io/sunyu2481/xunlei:latest
+```
+
+首次发布的包默认是私有的；如需免登录拉取，可在 GitHub 包设置中将可见性改为公开。
+
+上游镜像：
+
 ```plain
 cnk3x/xunlei:beta
 ghcr.io/cnk3x/xunlei:beta
