@@ -3,10 +3,12 @@ FROM --platform=linux/${TARGETARCH} ubuntu:focal
 ARG TARGETARCH
 ENV DEBIAN_FRONTEND=noninteractive
 
+# 保持 BusyBox 的 /lib64 符号链接布局，避免动态链接器目录冲突。
 RUN apt-get update \
   && apt-get install --no-install-recommends -y ca-certificates tzdata iproute2 \
   && rm -rf /var/lib/apt/lists/* \
   && mkdir -p /rootfs/etc/ssl/certs /rootfs/lib \
+  && ln -s lib /rootfs/lib64 \
   && find /usr/lib \( -name libdl.so.2 -o -name libgcc_s.so.1 -o -name libstdc++.so.6 \) -exec cp -Lr {} /rootfs/lib/ \; \
   && cp -Lr /usr/share/zoneinfo/Asia/Chongqing /rootfs/etc/localtime \
   && echo "Asia/Chongqing" >/rootfs/etc/timezone \
@@ -19,7 +21,8 @@ RUN apt-get update \
 COPY artifacts/xlp-${TARGETARCH} /rootfs/xlp
 RUN chmod +x /rootfs/xlp
 
-FROM --platform=linux/${TARGETARCH} busybox:1.37
+# 使用 musl 版本，避免 Ubuntu 的 glibc 运行库影响 BusyBox 启动。
+FROM --platform=linux/${TARGETARCH} busybox:1.37-musl
 ARG TARGETARCH
 
 LABEL org.opencontainers.image.authors=cnk3x \
