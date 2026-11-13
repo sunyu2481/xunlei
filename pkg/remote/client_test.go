@@ -61,6 +61,43 @@ func wantKind(t *testing.T, err error, kind string) {
 	}
 }
 
+func TestBusinessErrorSuccessDescription(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		body string
+		kind string
+	}{
+		{"短信数字成功码", `{"errorCode":0,"errorDesc":"成功"}`, ""},
+		{"短信字符串成功码", `{"errorCode":"0","errorDesc":"成功"}`, ""},
+		{"通用数字成功码", `{"error_code":0,"error_description":"成功"}`, ""},
+		{"通用字符串成功码", `{"error_code":"0","error":"success","error_description":"成功"}`, ""},
+		{"无错误字段", `{}`, ""},
+		{"短信非零错误码", `{"errorCode":100,"errorDesc":"成功"}`, "upstream"},
+		{"通用非零错误码", `{"error_code":123,"error_description":"成功"}`, "upstream"},
+		{"短信错误码优先于通用成功码", `{"error_code":0,"errorCode":13,"errorDesc":"成功"}`, "review_expired"},
+		{"通用错误码优先于短信成功码", `{"error_code":9,"errorCode":0,"error_description":"成功"}`, "captcha_required"},
+		{"零码仍携带风控错误", `{"errorCode":0,"error":"review_panel","errorDesc":"需要验证"}`, "review_required"},
+		{"零码仍携带登录错误", `{"error_code":0,"error":"invalid_grant","error_description":"登录失效"}`, "login_required"},
+		{"仅有短信错误说明", `{"errorDesc":"请求失败"}`, "upstream"},
+		{"仅有通用错误说明", `{"error_description":"请求失败"}`, "upstream"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			var d object
+			dec := json.NewDecoder(strings.NewReader(tt.body))
+			dec.UseNumber()
+			if err := dec.Decode(&d); err != nil {
+				t.Fatal(err)
+			}
+			err := businessError(d)
+			if tt.kind != "" {
+				wantKind(t, err, tt.kind)
+			} else if err != nil {
+				t.Fatalf("成功响应不应被说明文字误判：%v", err)
+			}
+		})
+	}
+}
+
 func TestLoginAndRestore(t *testing.T) {
 	var refreshes atomic.Int32
 	handler := func(w http.ResponseWriter, r *http.Request) {
@@ -201,7 +238,7 @@ func TestReviewSMSWithCookieResult(t *testing.T) {
 			}
 			sent = true
 			http.SetCookie(w, &http.Cookie{Name: "deviceid", Value: "abcdefghijklmnopqrstuvwx12345678"})
-			fmt.Fprint(w, `callback({"errorCode":"0","token":"短信令牌","creditkey":"续期验证键"});`)
+			fmt.Fprint(w, `callback({"errorCode":"0","errorDesc":"成功","token":"短信令牌","creditkey":"续期验证键"});`)
 		case "/xluser.core.login/v3/checksms":
 			if err := r.ParseMultipartForm(4096); err != nil {
 				t.Fatal(err)
@@ -234,12 +271,52 @@ func TestReviewSMSWithCookieResult(t *testing.T) {
 	if err := c.SendSMS(context.Background()); err != nil {
 		t.Fatal(err)
 	}
+	saved, err := readState(c.path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if saved.ReviewToken != "短信令牌" || saved.ReviewSentAt == 0 {
+		t.Fatal("短信发送成功后未保存验证令牌和发送时间")
+	}
 	wantKind(t, c.SendSMS(context.Background()), "rate_limited")
 	if err := c.CheckSMS(context.Background(), "123456"); err != nil {
 		t.Fatal(err)
 	}
 	if !reported || !c.Status().LoggedIn || c.Status().ReviewRequired || len(c.snapshot().ReviewCookies) > 0 {
 		t.Fatal("验证后的会话状态未清理")
+	}
+}
+
+func TestSendSMSRejectsFailureResponses(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		body string
+		kind string
+	}{
+		{"非零错误码携带令牌", `{"errorCode":100,"errorDesc":"失败","token":"不可使用的令牌"}`, "upstream"},
+		{"零码携带具名错误", `{"errorCode":0,"error":"invalid_grant","token":"不可使用的令牌"}`, "login_required"},
+		{"成功响应缺少令牌", `{"errorCode":0,"errorDesc":"成功"}`, "upstream"},
+		{"仅返回错误说明", `{"errorDesc":"失败","token":"不可使用的令牌"}`, "upstream"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			sends := 0
+			c := mockClient(t, func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path != "/xluser.core.login/v3/sendsms" {
+					t.Fatalf("短信发送失败后不应继续校验：%s", r.URL.Path)
+				}
+				sends++
+				fmt.Fprint(w, tt.body)
+			})
+			c.update(func(s *state) { s.ReviewURL = accountURL + "/review?creditkey=验证信任键" })
+			wantKind(t, c.SendSMS(context.Background()), tt.kind)
+			if s := c.snapshot(); s.ReviewToken != "" || s.ReviewSentAt != 0 {
+				t.Fatal("失败响应不应保存验证令牌或启动重发倒计时")
+			}
+			wantKind(t, c.CheckSMS(context.Background(), "123456"), "invalid_request")
+			if sends != 1 {
+				t.Fatal("发送失败不应自动重复发送短信")
+			}
+		})
 	}
 }
 

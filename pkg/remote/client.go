@@ -127,7 +127,10 @@ func businessError(d object) error {
 		code = integer(d["errorCode"])
 	}
 	name := str(d["error"])
-	if code == 0 && (name == "" || name == "success") && str(d["error_description"]) == "" && str(d["errorDesc"]) == "" {
+	// 成功码为 0 时也可能附带说明文字，不能仅凭说明非空判定失败。
+	successCode := str(d["error_code"]) == "0" || str(d["errorCode"]) == "0"
+	hasDescription := str(d["error_description"]) != "" || str(d["errorDesc"]) != ""
+	if code == 0 && (name == "" || name == "success") && (successCode || !hasDescription) {
 		return nil
 	}
 	e := &Error{Kind: "upstream", RemoteCode: int(code), Message: fmt.Sprintf("迅雷接口拒绝请求（错误码 %d），请稍后重试", code)}
