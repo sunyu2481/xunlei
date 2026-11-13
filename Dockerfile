@@ -46,7 +46,7 @@ ENV \
   XL_DEBUG= \
   XL_UPLOAD_LIMIT=0 \
   XL_UPLOAD_INTERFACE=eth0 \
-  XL_SPK_URL=
+  XL_SPK=
 
 VOLUME [ "/xunlei/data", "/xunlei/var/packages/pan-xunlei-com" ]
 EXPOSE 2345
