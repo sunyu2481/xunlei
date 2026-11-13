@@ -53,67 +53,38 @@ ghcr.io/cnk3x/xunlei:4.0.0-beta
 
 #### 参数
 
-程序默认参数
+命令行参数优先于环境变量。运行 `xlp --help` 可查看当前版本的完整参数。
 
-```shell
-OPTIONS:
-      --dashboard_port uint16       网页访问的端口 [XL_DASHBOARD_PORT, XL_PORT] (default 2345)
-      --dashboard_ip ip             网页访问绑定IP，默认绑定所有IP [XL_DASHBOARD_IP, XL_IP]
-      --dashboard_username string   网页访问的用户名 [XL_DASHBOARD_USERNAME, XL_BA_USER]
-      --dashboard_password string   网页访问的密码 [XL_DASHBOARD_PASSWORD, XL_BA_PASSWORD]
-  -d, --dir_download strings        下载保存文件夹，可多次指定，需确保有权限访问 [XL_DIR_DOWNLOAD] (default [/mnt/d/Code/github.com/cnk3x/xunlei/artifacts/xunlei/downloads])
-  -D, --dir_data string             程序数据保存文件夹，其下'.drive'文件夹中，存储了登录的账号，下载进度等信息 [XL_DIR_DATA] (default "/mnt/d/Code/github.com/cnk3x/xunlei/artifacts/xunlei/data")
-  -u, --uid uint32                  运行迅雷的用户ID [XL_UID, UID]
-  -g, --gid uint32                  运行迅雷的用户组ID [XL_GID, GID]
-      --prevent_update              阻止更新 [XL_PREVENT_UPDATE]
-  -r, --chroot string               主目录 [XL_CHROOT] (default "/mnt/d/Code/github.com/cnk3x/xunlei/artifacts/xunlei")
-      --spk string                  SPK 下载链接 [XL_SPK] (default "https://down.sandai.net/nas/nasxunlei-DSM7-x86_64.spk")
-  -F, --force_download              强制下载 [XL_SPK_FORCE_DOWNLOAD]
-      --launcher_log_file string    迅雷启动器日志文件 [XL_LAUNCHER_LOG_FILE]
-      --upload_limit uint64         容器总出站限速，单位 KiB/s，0 表示不限速 [XL_UPLOAD_LIMIT]
-      --upload_interface string     上传限速使用的容器 veth 网卡 [XL_UPLOAD_INTERFACE] (default "eth0")
-      --debug                       是否开启调试日志 [XL_DEBUG]
-```
+| 命令行参数 | 环境变量 | 默认值 | 说明 |
+| --- | --- | --- | --- |
+| `--dashboard_port` | `XL_DASHBOARD_PORT`、`XL_PORT` | `2345` | 网页访问的端口 |
+| `--dashboard_ip` | `XL_DASHBOARD_IP`、`XL_IP` | 空，绑定所有 IP | 网页访问绑定的 IP |
+| `--dashboard_username` | `XL_DASHBOARD_USERNAME`、`XL_BA_USER` | 空 | 网页访问的用户名；只设置密码时为 `admin` |
+| `--dashboard_password` | `XL_DASHBOARD_PASSWORD`、`XL_BA_PASSWORD` | 空，不启用访问认证 | 网页访问的密码 |
+| `-r`、`--root` | `XL_ROOT`、`XL_CHROOT` | 当前目录下的 `xunlei` | 主目录，迅雷在此目录内隔离运行 |
+| `-d`、`--dir_download` | `XL_DIR_DOWNLOAD` | `<主目录>/downloads` | 下载保存目录，可多次指定或用冒号 `:` 分隔，必须位于主目录内 |
+| `-D`、`--dir_data` | `XL_DIR_DATA` | `<主目录>/data` | 程序数据目录，必须位于主目录内且可写；其下 `.drive` 保存登录账号和下载进度 |
+| `-u`、`--uid` | `XL_UID`、`UID` | `0` | 运行迅雷的用户 ID |
+| `-g`、`--gid` | `XL_GID`、`GID` | `0` | 运行迅雷的用户组 ID |
+| `--prevent_update` | `XL_PREVENT_UPDATE` | `false` | 阻止迅雷自动更新 |
+| `--spk` | `XL_SPK` | 按架构使用官方下载地址 | SPK 下载地址，支持 `http://`、`https://` 和 `file://` |
+| `-F`、`--spk_force_download` | `XL_SPK_FORCE_DOWNLOAD` | `false` | 已有套件文件时仍重新下载 |
+| `--upload_limit` | `XL_UPLOAD_LIMIT` | `0` | 总出站限速，单位 KiB/s，`0` 表示不限速，见[上传限速](#上传限速) |
+| `--upload_interface` | `XL_UPLOAD_INTERFACE` | `eth0` | 上传限速使用的 veth 网卡 |
+| `--launcher_log_file` | `XL_LAUNCHER_LOG_FILE` | 空 | 迅雷启动器日志文件 |
+| `--debug` | `XL_DEBUG` | `false` | 调试模式：日志等级改为 `debug`，运行出错后不自动退出，按 Ctrl+C 退出 |
+| `--log` | `XL_LOG` | `info` | 日志等级，可选 `debug`、`info`、`warn`、`error` |
 
-容器内参数默认值（在容器内运行时，覆盖程序默认参数）
+`--chroot` 已弃用，请改用 `--root`。布尔类型的环境变量可使用 `true`、`false`、`1`、`0`。
 
-```shell
-#网页访问的端口
-XL_DASHBOARD_PORT=2345
-#网页访问绑定IP
-XL_DASHBOARD_IP=
-# 网页访问的用户名
-XL_DASHBOARD_USERNAME=
-# 网页访问的密码
-XL_DASHBOARD_PASSWORD=
-# 如果需要指定多个下载目录，手动指定XL_DIR_DOWNLOAD
-# 多个以冒号`:`隔开，在容器内,都必须以 /xunlei 开头，迅雷面板选择保存路径显示会去掉/xunlei前缀
-# 指定后可以在 volumes 中绑定宿主机实际目录
-# 迅雷云盘的缓存会使用第一个目录会缓存
-# /xunlei/后面可以用中文
-# 不设置默认一个目录 /xunlei/downloads
-XL_DIR_DOWNLOAD=/xunlei/downloads
-# 程序数据保存文件夹，存储了登录的账号，下载进度等信息,容器内不要更改
-XL_DIR_DATA=/xunlei/data
-# 阻止更新
-XL_PREVENT_UPDATE=false
-# SPK下载链接, 默认指向官方下载地址，如果失效，请自行指定 ***.spk的下载地址
-# 可以使用 file:/// 访问本地文件, 真实使用路径会去掉 file://, 所以如果是绝对路径, 三个斜杠不能少
-XL_SPK=
-# 是否强制下载SPK, 0: 不强制, 1: 强制，如果不指定强制下载，不会重复下载SPK
-XL_SPK_FORCE_DOWNLOAD=0
-# 运行迅雷的用户ID, 默认0,即 root 账号
-# 推荐使用当前账号的UID和GID, 一般来说是 1000, 以免出现下载后普通账号无法处理文件的情况
-XL_UID=0
-# 运行迅雷的用户GID
-XL_GID=0
-# 是否开启调试日志
-XL_DEBUG=false
-# 容器总出站限速，单位 KiB/s，0 表示不限速；启用需要 NET_ADMIN 和桥接网络
-XL_UPLOAD_LIMIT=0
-# 上传限速使用的容器网卡
-XL_UPLOAD_INTERFACE=eth0
-```
+#### 容器内的默认值
+
+镜像以 `/xunlei` 为主目录，下载目录默认为 `/xunlei/downloads`，数据目录默认为 `/xunlei/data`。容器内不要修改数据目录，应将其挂载到宿主机以保留登录状态。
+
+- `XL_DIR_DOWNLOAD` 指定多个目录时用冒号 `:` 隔开。每个目录都必须以 `/xunlei/` 开头，目录名可以使用中文，再在 `volumes` 中绑定宿主机的实际目录。迅雷面板显示保存路径时会去掉 `/xunlei` 前缀。迅雷云盘的缓存使用第一个下载目录。
+- `XL_SPK` 默认指向官方下载地址，失效时可指定其他 SPK 地址。`file://` 后接本地路径，绝对路径要写成 `file:///` 加路径，三个斜杠不能少。未强制下载时，已有的套件文件不会重复下载。
+- `XL_UID`、`XL_GID` 默认为 `0`，即 root。建议设置为宿主机普通账号的 ID（通常为 `1000`），并确保该账号可以读写下载目录，以免下载后的文件无法由普通账号处理。
+- 启用上传限速需要 `NET_ADMIN` 权限和桥接网络。
 
 #### 远程下载页签
 
