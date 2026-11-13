@@ -48,3 +48,23 @@ func TestConfigUploadLimit(t *testing.T) {
 		})
 	}
 }
+
+func TestConfigWithoutAdditionalPanelCredentials(t *testing.T) {
+	oldFlags, oldArgs, oldLogger := flags.CommandLine, os.Args, slog.Default()
+	t.Cleanup(func() { flags.CommandLine, os.Args = oldFlags, oldArgs; slog.SetDefault(oldLogger) })
+	flags.CommandLine = pflag.NewFlagSet("面板配置测试", pflag.ContinueOnError)
+	os.Args = []string{"xlp"}
+	t.Setenv("XL_ROOT", t.TempDir())
+	t.Setenv("XL_DASHBOARD_USERNAME", "")
+	t.Setenv("XL_DASHBOARD_PASSWORD", "")
+	t.Setenv("XL_BA_USER", "")
+	t.Setenv("XL_BA_PASSWORD", "")
+	t.Setenv("XL_UPLOAD_LIMIT", "")
+	var cfg Config
+	if err := ConfigBind(&cfg); err != nil {
+		t.Fatalf("不应要求额外设置面板账号：%v", err)
+	}
+	if cfg.DashboardUsername != "" || cfg.DashboardPassword != "" {
+		t.Fatal("不应自动生成面板访问凭据")
+	}
+}

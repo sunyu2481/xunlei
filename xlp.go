@@ -16,6 +16,8 @@ import (
 	"github.com/cnk3x/xunlei/pkg/cmdx"
 	"github.com/cnk3x/xunlei/pkg/fo"
 	"github.com/cnk3x/xunlei/pkg/log"
+	"github.com/cnk3x/xunlei/pkg/remote"
+	"github.com/cnk3x/xunlei/pkg/remoteweb"
 	"github.com/cnk3x/xunlei/pkg/utils"
 	"github.com/cnk3x/xunlei/pkg/vms/sys"
 	"github.com/cnk3x/xunlei/pkg/web"
@@ -121,7 +123,12 @@ func Run(cfg Config) func(ctx context.Context) error {
 
 		envs := mockEnv(dirData, strings.Join(dirDownload, ":"))
 
-		go webRun(log.Prefix(ctx, "web"), envs, cfg, cancel)
+		remoteClient, err := remote.New(filepath.Join(dirData, "remote", "state.json"))
+		if err != nil {
+			return err
+		}
+		defer func() { cancel(); remoteClient.Close() }()
+		go webRun(log.Prefix(ctx, "web"), envs, cfg, remoteClient, cancel)
 
 		panCtx := log.Prefix(ctx, "pan")
 		return cmdx.Run(ctx, FILE_PAN_XUNLEI_CLI,
@@ -149,7 +156,7 @@ func Run(cfg Config) func(ctx context.Context) error {
 	}
 }
 
-func webRun(ctx context.Context, env []string, cfg Config, onDone func()) {
+func webRun(ctx context.Context, env []string, cfg Config, remoteClient *remote.Client, onDone func()) {
 	defer onDone()
 	mux := web.NewMux()
 	mux.Recoverer()
@@ -169,14 +176,19 @@ func webRun(ctx context.Context, env []string, cfg Config, onDone func()) {
 	defer lLog.Close()
 
 	const CGI_PATH = "/webman/3rdparty/" + SYNOPKG_PKGNAME + "/index.cgi/"
-	mux.With(web.BasicAuth(cfg.DashboardUsername, cfg.DashboardPassword)).Mount(CGI_PATH, &cgi.Handler{
+	mux.With(web.BasicAuth(cfg.DashboardUsername, cfg.DashboardPassword)).Mount(CGI_PATH, remoteweb.Panel(&cgi.Handler{
 		Dir:    DIR_SYNOPKG_WORK,
 		Path:   FILE_INDEX_CGI,
 		Env:    env,
 		Stderr: lErr,
 		Logger: utils.LogStd(lLog),
-	})
+	}))
 
+	if remoteClient != nil {
+		handler := web.BasicAuth(cfg.DashboardUsername, cfg.DashboardPassword)(remoteweb.New(remoteClient))
+		mux.Mount("/remote", handler)
+		mux.Mount("/api/remote", handler)
+	}
 	mux.Get("/", web.Redirect(CGI_PATH, true))
 	mux.Get("/web", web.Redirect(CGI_PATH, true))
 	mux.Get("/webman", web.Redirect(CGI_PATH, true))
