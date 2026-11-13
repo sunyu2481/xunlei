@@ -5,7 +5,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
+	"log/slog"
 	"mime/multipart"
 	"net/http"
 	"net/url"
@@ -156,6 +158,19 @@ func (c *Client) review(ctx context.Context, code string) (object, error) {
 		}
 		err = businessError(d)
 		var e *Error
+		if errors.As(err, &e) && e.Kind == "upstream" && e.RemoteCode == 0 {
+			stage := "短信发送"
+			if code != "" {
+				stage = "短信校验"
+			}
+			// 只记录字段类型及是否存在，不记录账号、验证码、令牌或上游原文。
+			slog.WarnContext(ctx, "短信验证响应摘要", "阶段", stage,
+				"errorCode类型", fmt.Sprintf("%T", d["errorCode"]), "error_code类型", fmt.Sprintf("%T", d["error_code"]),
+				"error类型", fmt.Sprintf("%T", d["error"]), "错误标识非空", str(d["error"]) != "",
+				"包含短信令牌", str(d["token"]) != "", "包含校验结果", str(d["blogresult"]) != "",
+				"包含中文说明", str(d["errorDesc"]) != "", "包含通用说明", str(d["error_description"]) != "")
+			e.Message = stage + "返回了未识别的状态，请查看服务日志中的「短信验证响应摘要」"
+		}
 		if !errors.As(err, &e) || e.Kind != "review_expired" {
 			return d, err
 		}
