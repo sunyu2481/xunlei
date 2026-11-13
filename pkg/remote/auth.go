@@ -66,6 +66,10 @@ func (c *Client) Login(ctx context.Context, username, password string, remember 
 		}
 		s.Username, s.Password, s.Remember = username, password, remember
 		s.AccessToken, s.RefreshToken, s.CaptchaToken, s.UserID = "", "", "", ""
+		// 手动重新登录时废弃上一次验证，避免失败后继续使用旧账号验证入口。
+		s.ReviewURL, s.ReviewKey, s.ReviewToken = "", "", ""
+		s.ReviewCookies = nil
+		s.ReviewSentAt = 0
 		s.VerificationURL = ""
 	})
 	if old.Username != username {

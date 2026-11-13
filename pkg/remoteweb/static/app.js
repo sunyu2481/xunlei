@@ -4,6 +4,7 @@ const $ = (id) => document.getElementById(id);
 let status = {}, tasks = [], filter = 'all', nextPage = '', refreshing = false;
 let creating = false, folderCurrent = '', folderHistory = [], folderCallback = null;
 let generation = 0, pagesLoaded = 0, submissions = {};
+let loginGeneration = 0, verificationUsername = '', smsTimer = null, noticeTimer = null, refreshQueued = false;
 let visibleInPanel = window.parent === window;
 try { submissions = JSON.parse(sessionStorage.getItem('xlp-remote-submissions') || '{}'); } catch { /* 浏览器不支持存储时使用当前页面内存。 */ }
 if (!submissions || typeof submissions !== 'object' || Array.isArray(submissions)) submissions = {};
@@ -14,9 +15,11 @@ function rememberSubmissions() {
   try { sessionStorage.setItem('xlp-remote-submissions', JSON.stringify(submissions)); } catch { /* 存储满时仍可在本页检查提交结果。 */ }
 }
 function notice(message, success = false) {
+  clearTimeout(noticeTimer);
   $('notice').textContent = message;
   $('notice').classList.toggle('success', success);
   $('notice').hidden = !message;
+  if (message && success) noticeTimer = setTimeout(() => notice(''), 5000);
 }
 async function api(path, method = 'GET', body) {
   const headers = {};
@@ -62,18 +65,34 @@ async function loadStatus() {
   $('device-name').textContent = status.target_name || '请选择下载设备';
   $('current-directory').textContent = status.directory ? '保存位置：' + status.directory : '';
   $('status-text').textContent = status.logged_in ? (status.target ? '已连接账号 · ' + status.target_name : '已登录，请选择下载设备') : '未登录迅雷账号';
-  $('review-form').hidden = !status.review_required;
-  $('review-mobile').textContent = status.mobile || '';
-  $('verification-link').hidden = !status.verification_url;
-  if (status.verification_url) $('verification-link').href = status.verification_url;
+  renderLoginReview();
   renderTasks();
 }
+function renderLoginReview() {
+  const current = $('login-dialog').open && verificationUsername && verificationUsername === $('username').value.trim() && verificationUsername === status.username;
+  $('review-form').hidden = !(current && status.review_required);
+  $('review-mobile').textContent = current ? status.mobile || '' : '';
+  $('verification-link').hidden = !(current && status.verification_url);
+  if (current && status.verification_url) $('verification-link').href = status.verification_url;
+  else $('verification-link').removeAttribute('href');
+}
+function resetLoginReview() {
+  loginGeneration++; verificationUsername = '';
+  clearInterval(smsTimer); smsTimer = null;
+  $('sms-code').value = ''; $('send-sms').textContent = '获取验证码';
+  ['login-submit', 'review-submit', 'send-sms'].forEach((id) => { $(id).disabled = false; });
+  renderLoginReview();
+}
 function openLogin() {
+  resetLoginReview();
   $('username').value = status.username || '';
+  $('password').value = '';
   $('remember').checked = !!status.remember_password;
   $('login-message').textContent = '';
   showDialog('login-dialog');
 }
+$('login-dialog').addEventListener('close', () => { resetLoginReview(); $('password').value = ''; });
+['username', 'password'].forEach((id) => $(id).addEventListener('input', () => { resetLoginReview(); $('login-message').textContent = ''; }));
 async function sessionError(error) {
   if (!['login_required', 'captcha_required', 'review_required', 'verification_required'].includes(error.code)) return;
   try { await loadStatus(); } catch { /* 网络不可用时仍允许重新输入账号。 */ }
@@ -89,36 +108,52 @@ $('account-button').addEventListener('click', async () => {
   } catch (error) { notice(error.message); }
 });
 $('login-form').addEventListener('submit', async (event) => {
-  event.preventDefault(); $('login-submit').disabled = true; $('login-message').textContent = '正在登录…';
+  event.preventDefault(); resetLoginReview();
+  const token = loginGeneration, username = $('username').value.trim();
+  $('login-submit').disabled = true; $('login-message').textContent = '正在登录…';
   try {
-    await api('/login', 'POST', { username: $('username').value.trim(), password: $('password').value, remember_password: $('remember').checked });
+    await api('/login', 'POST', { username, password: $('password').value, remember_password: $('remember').checked });
+    if (token !== loginGeneration) return;
     $('password').value = ''; $('login-dialog').close(); await loadStatus(); notice('登录成功', true); await openDevices();
   } catch (error) {
+    if (token !== loginGeneration) return;
     $('login-message').textContent = error.message;
     try { await loadStatus(); } catch { /* 保留本次登录错误。 */ }
-  } finally { $('login-submit').disabled = false; }
+    if (token === loginGeneration && ['review_required', 'verification_required', 'captcha_required'].includes(error.code)) {
+      verificationUsername = username; renderLoginReview();
+    }
+  } finally { if (token === loginGeneration) $('login-submit').disabled = false; }
 });
 $('send-sms').addEventListener('click', async () => {
+  if ($('review-form').hidden) return;
+  const token = loginGeneration;
   $('send-sms').disabled = true;
   try {
-    await api('/review/send', 'POST', {}); $('login-message').textContent = '验证码已发送，请查收短信';
+    await api('/review/send', 'POST', {});
+    if (token !== loginGeneration) return;
+    $('login-message').textContent = '验证码已发送，请查收短信';
     let remaining = 60; $('send-sms').textContent = remaining + ' 秒后重发';
-    const timer = setInterval(() => {
+    clearInterval(smsTimer);
+    smsTimer = setInterval(() => {
       remaining--; $('send-sms').textContent = remaining + ' 秒后重发';
-      if (remaining <= 0) { clearInterval(timer); $('send-sms').textContent = '获取验证码'; $('send-sms').disabled = false; }
+      if (remaining <= 0) { clearInterval(smsTimer); smsTimer = null; $('send-sms').textContent = '获取验证码'; $('send-sms').disabled = false; }
     }, 1000);
-  } catch (error) { $('login-message').textContent = error.message; $('send-sms').disabled = false; }
+  } catch (error) { if (token === loginGeneration) { $('login-message').textContent = error.message; $('send-sms').disabled = false; } }
 });
 $('review-form').addEventListener('submit', async (event) => {
-  event.preventDefault(); $('review-submit').disabled = true; $('login-message').textContent = '正在验证并登录…';
+  event.preventDefault(); if ($('review-form').hidden) return;
+  const token = loginGeneration;
+  $('review-submit').disabled = true; $('login-message').textContent = '正在验证并登录…';
   try {
     await api('/review/check', 'POST', { code: $('sms-code').value.trim() });
+    if (token !== loginGeneration) return;
     $('sms-code').value = ''; $('password').value = ''; $('login-dialog').close();
     await loadStatus(); notice('验证通过，已登录', true); await openDevices();
   } catch (error) {
+    if (token !== loginGeneration) return;
     $('login-message').textContent = error.message;
     try { await loadStatus(); } catch { /* 保留验证错误。 */ }
-  } finally { $('review-submit').disabled = false; }
+  } finally { if (token === loginGeneration) $('review-submit').disabled = false; }
 });
 
 async function openDevices() {
@@ -231,19 +266,30 @@ function renderTasks() {
   });
 }
 async function refreshTasks(append = false) {
-  if (refreshing || !status.logged_in || !status.target) return;
+  if (!status.logged_in || !status.target) return;
+  if (refreshing) { refreshQueued = true; return; }
   refreshing = true; $('refresh-button').disabled = true; $('load-more').disabled = true;
-  const token = generation, target = status.target, pageToken = append ? nextPage : '';
+  const token = generation, target = status.target, limit = append ? 1 : Math.max(1, pagesLoaded);
   try {
-    const data = await api('/tasks?target=' + encodeURIComponent(target) + '&page_token=' + encodeURIComponent(pageToken));
-    if (token !== generation) return;
-    const combined = append ? [...tasks, ...data.tasks] : data.tasks;
-    tasks = [...new Map(combined.map((task) => [task.id, task])).values()]; nextPage = data.next_page_token || '';
-    if (nextPage === pageToken) nextPage = '';
-    pagesLoaded = append ? pagesLoaded + 1 : 1; renderTasks();
+    const combined = append ? [...tasks] : [], seen = new Set();
+    let pageToken = append ? nextPage : '', loaded = 0;
+    do {
+      seen.add(pageToken);
+      const data = await api('/tasks?target=' + encodeURIComponent(target) + '&page_token=' + encodeURIComponent(pageToken));
+      if (token !== generation) return;
+      combined.push(...data.tasks); loaded++;
+      pageToken = data.next_page_token || '';
+      if (seen.has(pageToken)) pageToken = '';
+    } while (pageToken && loaded < limit);
+    tasks = [...new Map(combined.map((task) => [task.id, task])).values()]; nextPage = pageToken;
+    pagesLoaded = append ? pagesLoaded + loaded : loaded; renderTasks();
+    if ($('notice').classList.contains('success')) notice('');
     $('status-text').textContent = '已更新 · ' + new Date().toLocaleTimeString('zh-CN');
   } catch (error) { notice(error.message); $('status-text').textContent = '刷新失败，可稍后重试'; await sessionError(error); }
-  finally { refreshing = false; $('refresh-button').disabled = false; $('load-more').disabled = false; }
+  finally {
+    refreshing = false; $('refresh-button').disabled = false; $('load-more').disabled = false;
+    if (refreshQueued) { refreshQueued = false; await refreshTasks(); }
+  }
 }
 async function taskAction(task, action, button) {
   if (action === 'delete' && !confirm('删除任务“' + task.name + '”？删除后的任务无法在此恢复。')) return;
@@ -261,7 +307,8 @@ $('load-more').addEventListener('click', () => refreshTasks(true));
 document.querySelectorAll('[data-filter]').forEach((button) => button.addEventListener('click', () => {
   filter = button.dataset.filter;
   document.querySelectorAll('[data-filter]').forEach((tab) => { tab.classList.toggle('active', tab === button); tab.setAttribute('aria-selected', String(tab === button)); });
-  renderTasks();
+  if ($('notice').classList.contains('success')) notice('');
+  renderTasks(); refreshTasks();
 }));
 function openCreate() {
   if (!status.logged_in) { openLogin(); return; }
@@ -279,6 +326,7 @@ window.addEventListener('message', (event) => {
   if (event.source !== window.parent || event.origin !== location.origin || event.data?.type !== 'xlp:remote-visibility') return;
   const previous = visibleInPanel;
   visibleInPanel = event.data.visible === true;
+  if (!visibleInPanel && $('notice').classList.contains('success')) notice('');
   if (visibleInPanel && !previous) refreshTasks();
 });
 
@@ -326,5 +374,5 @@ $('create-dialog').addEventListener('close', () => {
   } catch (error) { notice(error.message); $('status-text').textContent = '连接失败，请刷新页面'; }
 })();
 setInterval(() => {
-  if (visibleInPanel && !document.hidden && !document.querySelector('dialog[open]') && pagesLoaded <= 1) refreshTasks();
+  if (visibleInPanel && !document.hidden && !document.querySelector('dialog[open]')) refreshTasks();
 }, 15000);

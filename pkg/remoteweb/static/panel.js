@@ -3,13 +3,31 @@
   if (window.__xlpRemotePanel) return;
   window.__xlpRemotePanel = true;
   const parameter = 'xlpRemote';
-  let menu = null, sidebar = null, frame = null, scheduled = false;
+  let menu = null, sidebar = null, frame = null, scheduled = false, closeTimer = null;
   const resizeObserver = new ResizeObserver(layout);
   let lastRoute = '#/home';
 
   function remoteRoute() {
     const at = location.hash.indexOf('?');
     return at >= 0 && new URLSearchParams(location.hash.slice(at + 1)).get(parameter) === '1';
+  }
+  function closeRemote() {
+    if (!remoteRoute()) return;
+    const at = location.hash.indexOf('?');
+    const params = new URLSearchParams(location.hash.slice(at + 1));
+    params.delete(parameter);
+    const query = params.toString();
+    // 先移除远程标记，让原菜单即使选中当前路由也能立即恢复内容区。
+    history.replaceState(history.state, '', location.pathname + location.search + location.hash.slice(0, at) + (query ? '?' + query : ''));
+    sync();
+  }
+  function nativeNavigation(event) {
+    if (!remoteRoute() || !sidebar?.contains(event.target) || menu?.contains(event.target)) return;
+    if (event.type === 'keydown' && !['Enter', ' '].includes(event.key)) return;
+    closeRemote();
+    // 原路由组件可能异步携带旧查询参数，待本轮菜单事件及路由更新结束后再清除。
+    clearTimeout(closeTimer);
+    closeTimer = setTimeout(closeRemote, 0);
   }
   function visible(node) {
     const rect = node.getBoundingClientRect();
@@ -85,6 +103,7 @@
   }
   function openRemote(event) {
     event.preventDefault(); event.stopPropagation();
+    clearTimeout(closeTimer);
     const route = location.hash || '#/home';
     const at = route.indexOf('?');
     const params = new URLSearchParams(at >= 0 ? route.slice(at + 1) : '');
@@ -128,6 +147,8 @@
   window.addEventListener('hashchange', schedule);
   window.addEventListener('popstate', schedule);
   window.addEventListener('resize', layout);
+  document.addEventListener('click', nativeNavigation, true);
+  document.addEventListener('keydown', nativeNavigation, true);
   window.addEventListener('message', (event) => {
     if (!frame || event.source !== frame.contentWindow || event.origin !== location.origin) return;
     if (event.data?.type === 'xlp:remote-ready') notifyFrame();

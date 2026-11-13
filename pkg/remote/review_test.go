@@ -10,6 +10,40 @@ import (
 	"testing"
 )
 
+func TestLoginDiscardsPreviousReview(t *testing.T) {
+	for _, username := range []string{"上次账号", "其他账号"} {
+		t.Run(username, func(t *testing.T) {
+			c := mockClient(t, func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path != "/xluser.core.login/v3/login" {
+					t.Fatal("登录失败后不应请求验证接口")
+				}
+				respond(w, object{"error_code": 100, "error": "rejected"})
+			})
+			c.update(func(s *state) {
+				s.Username = "上次账号"
+				s.ReviewURL = accountURL + "/review?creditkey=上次验证"
+				s.ReviewKey, s.ReviewToken = "上次信任键", "上次短信令牌"
+				s.ReviewCookies = map[string]string{"token": "上次短信令牌"}
+				s.ReviewSentAt = 123
+				s.VerificationURL = accountURL + "/verify"
+			})
+			wantKind(t, c.Login(context.Background(), username, "密码", false), "upstream")
+			saved, err := readState(c.path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, s := range []state{c.snapshot(), saved} {
+				if s.ReviewURL != "" || s.ReviewKey != "" || s.ReviewToken != "" || len(s.ReviewCookies) != 0 || s.ReviewSentAt != 0 || s.VerificationURL != "" {
+					t.Fatal("重新登录失败后仍保留上次验证会话")
+				}
+			}
+			if c.Status().ReviewRequired || c.Status().LoggedIn {
+				t.Fatal("登录失败后不应显示已登录或短信验证状态")
+			}
+		})
+	}
+}
+
 func TestReviewSMSSuccessMarkers(t *testing.T) {
 	for _, tt := range []struct {
 		name    string

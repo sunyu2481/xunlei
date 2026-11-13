@@ -223,6 +223,49 @@ func TestTaskActionsUseActualTaskTypeAndSpace(t *testing.T) {
 	}
 }
 
+func TestTasksReadDownloadProgress(t *testing.T) {
+	for _, tc := range []struct {
+		name              string
+		fields            object
+		progress          float64
+		size, done, speed int64
+	}{
+		{"有总大小但无字节计数", object{"file_size": "1000", "progress": "37.5"}, 37.5, 1000, 375, 0},
+		{"数字进度", object{"file_size": 1000, "progress": 42}, 42, 1000, 420, 0},
+		{"原版任务参数", object{"file_size": "1000", "progress": "25", "status_size": "0", "params": object{"download_size": "250", "speed": "128"}}, 25, 1000, 250, 128},
+		{"参数中的进度", object{"file_size": "1000", "params": object{"progress": "60", "speed": "0"}, "download_speed": "128"}, 60, 1000, 600, 0},
+		{"缺少进度时按下载字节计算", object{"file_size": "1000", "params": object{"download_size": "350"}}, 35, 1000, 350, 0},
+		{"兼容顶层字节和速度", object{"file_size": "1000", "status_size": "500", "download_speed": "64"}, 50, 1000, 500, 64},
+		{"校验中的任务", object{"file_size": "1000", "progress": "100", "params": object{"download_size": "1000", "checked_size": "400"}}, 40, 1000, 1000, 0},
+		{"已完成任务", object{"file_size": "1000", "phase": "PHASE_TYPE_COMPLETE", "params": object{"checked_size": "0"}}, 100, 1000, 1000, 0},
+		{"未知总大小", object{"progress": "15.5"}, 15.5, 0, 0, 0},
+		{"无效进度退回字节计数", object{"file_size": "1000", "progress": "NaN", "status_size": "500"}, 50, 1000, 500, 0},
+		{"无限进度", object{"progress": "+Inf"}, 0, 0, 0, 0},
+		{"限制进度范围", object{"progress": "125"}, 100, 0, 0, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := mockClient(t, func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path != "/drive/v1/tasks" || r.URL.Query().Get("space") != "设备一" {
+					t.Fatal("未查询所选设备的任务")
+				}
+				task := object{"id": "任务一", "type": "user#download", "phase": "PHASE_TYPE_RUNNING"}
+				for k, v := range tc.fields {
+					task[k] = v
+				}
+				respond(w, object{"tasks": []any{task}})
+			})
+			page, err := c.Tasks(context.Background(), "设备一", "")
+			if err != nil || len(page.Tasks) != 1 {
+				t.Fatalf("读取任务失败：%v", err)
+			}
+			got := page.Tasks[0]
+			if got.Progress != tc.progress || got.Size != tc.size || got.Done != tc.done || got.Speed != tc.speed {
+				t.Fatalf("任务进度、字节数或速度不正确：%+v", got)
+			}
+		})
+	}
+}
+
 func TestDirectoryPaginationAndRelayRefresh(t *testing.T) {
 	discoveries := 0
 	calls := 0

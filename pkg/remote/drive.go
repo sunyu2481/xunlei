@@ -338,21 +338,30 @@ func (c *Client) taskPage(ctx context.Context, target, page string) (TaskPage, e
 		if space := str(t["space"]); space != "" && space != target {
 			continue
 		}
-		size, done := integer(t["file_size"]), integer(t["status_size"])
-		progress := float64(0)
-		if size > 0 {
-			progress = 100 * float64(done) / float64(size)
-		} else if value, e := strconv.ParseFloat(str(t["progress"]), 64); e == nil {
-			progress = value
-			if progress > 100 {
-				progress /= 100
+		size := max(0, integer(t["file_size"]))
+		doneText := first(str(p["download_size"]), str(t["status_size"]))
+		done := max(0, integer(doneText))
+		// 迅雷任务直接提供百分比；缺少字节计数时不能用零覆盖有效进度。
+		progress, progressErr := strconv.ParseFloat(first(str(t["progress"]), str(p["progress"])), 64)
+		if progressErr != nil || math.IsNaN(progress) || math.IsInf(progress, 0) {
+			progress = 0
+			if size > 0 {
+				progress = 100 * float64(done) / float64(size)
 			}
 		}
-		if str(t["phase"]) == "PHASE_TYPE_COMPLETE" {
-			progress = 100
+		// 文件已下载完但仍在校验时，按原版面板显示校验进度。
+		if checked, e := strconv.ParseInt(str(p["checked_size"]), 10, 64); e == nil && checked >= 0 && size > 0 && done == size {
+			progress = 100 * float64(checked) / float64(size)
 		}
 		if math.IsNaN(progress) || math.IsInf(progress, 0) {
 			progress = 0
+		}
+		progress = min(100, max(0, progress))
+		if doneText == "" && size > 0 {
+			done = int64(float64(size) * progress / 100)
+		}
+		if str(t["phase"]) == "PHASE_TYPE_COMPLETE" {
+			progress, done = 100, size
 		}
 		createdAt := integer(t["created_time"])
 		if createdAt > 1e12 {
@@ -364,7 +373,7 @@ func (c *Client) taskPage(ctx context.Context, target, page string) (TaskPage, e
 			}
 		}
 		out.Tasks = append(out.Tasks, Task{ID: str(t["id"]), Type: kind, Name: first(str(t["name"]), str(t["file_name"]), "未命名任务"),
-			Phase: str(t["phase"]), Progress: min(100, max(0, progress)), Size: size, Done: done, Speed: integer(t["download_speed"]), Directory: str(p["parent_folder_path"]), URL: str(p["url"]), createdAt: createdAt})
+			Phase: str(t["phase"]), Progress: progress, Size: size, Done: done, Speed: max(0, integer(first(str(p["speed"]), str(t["download_speed"])))), Directory: str(p["parent_folder_path"]), URL: str(p["url"]), createdAt: createdAt})
 	}
 	return out, nil
 }
