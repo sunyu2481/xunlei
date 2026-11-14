@@ -242,7 +242,7 @@ func mockSyno(ctx context.Context, root string) (undo func(), err error) {
 	}
 	bq.Put(u1)
 
-	u2, e := sys.NewFile(ctx, filepath.Join(root, FILE_SYNO_AUTHENTICATE_CGI), authenticate_cgi.WriteTo)
+	u2, e := sys.NewFile(ctx, filepath.Join(root, FILE_SYNO_AUTHENTICATE_CGI), authenticate_cgi.WriteTo, fo.Perm(0700))
 	if err = e; err != nil {
 		return
 	}
