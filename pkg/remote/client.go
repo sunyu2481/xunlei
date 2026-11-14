@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"strconv"
 	"strings"
@@ -290,7 +291,23 @@ func trustedURL(raw string) bool {
 	if err != nil || u.Scheme != "https" || u.User != nil || (u.Port() != "" && u.Port() != "443") {
 		return false
 	}
-	host := strings.ToLower(u.Hostname())
+	host := u.Hostname()
+	// 区域标识属于数值地址，不能把其中的文字当作可信域名。
+	if _, err := netip.ParseAddr(host); err == nil || len(host) > 253 {
+		return false
+	}
+	// 只接受合法的主机标签，避免无效主机仅凭域名后缀通过校验。
+	for _, label := range strings.Split(host, ".") {
+		if len(label) == 0 || len(label) > 63 || label[0] == '-' || label[len(label)-1] == '-' {
+			return false
+		}
+		for _, ch := range label {
+			if !((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9') || ch == '-') {
+				return false
+			}
+		}
+	}
+	host = strings.ToLower(host)
 	for _, domain := range []string{"xunlei.com", "sandai.net", "xunleix.com"} {
 		if host == domain || strings.HasSuffix(host, "."+domain) {
 			return true
