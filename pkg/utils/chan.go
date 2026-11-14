@@ -1,70 +1,51 @@
 package utils
 
 import (
+	"sync"
 	"time"
 )
 
-// SelectOnce select `cSelect` chan, return it (blocked)
-//
-//	v: if recv from cSelect
-//	ok: if cSelect is not closed
-//	breaked: if recv from cBreaks or any cBreaks is closed...
-//
-// like:
-//
-//	select{
-//		 case <- cBreaks[...]:
-//			v = nil, ok = false, breaked = true
-//		 case v, ok:= cSelect:
-//			v = v, ok = ok, breaked = false
-//	}
+// CSelect 等待数据或任一中断来源，并在返回前结束全部中断监听。
+// 接收数据时返回其值和通道状态；中断来源可读或关闭时返回零值、false、true。
+// 数据和中断同时就绪时，任一结果均可能被选择；nil 通道不触发完成。
 func CSelect[T any](cSelect <-chan T, cBreaks ...<-chan struct{}) (v T, ok, breaked bool) {
 	cBreaked := make(chan struct{})
+	stop := sync.OnceFunc(func() { close(cBreaked) })
+	var listeners sync.WaitGroup
+	defer func() {
+		stop()
+		listeners.Wait()
+	}()
 
 	for _, c := range cBreaks {
-		go func() {
+		listeners.Go(func() {
 			select {
 			case <-cBreaked:
 			case <-c:
-				close(cBreaked)
+				stop()
 			}
-		}()
+		})
 	}
 
 	select {
 	case <-cBreaked:
 		breaked = true
 	case v, ok = <-cSelect:
-		close(cBreaked)
 	}
 	return
 }
 
-// SelectDo do if recv from sSelect (blocked)
+// SelectDo 等待一次选择，仅在数据通道可读或关闭时调用 f，并返回是否被中断。
+// 调用 f 前已经回收全部中断监听，f 的异常按原样传播。
 func SelectDo[T any](cSelect <-chan T, f func(T, bool), cBreaks ...<-chan struct{}) (breaked bool) {
-	cBreaked := make(chan struct{})
-
-	for _, c := range cBreaks {
-		go func() {
-			select {
-			case <-cBreaked:
-			case <-c:
-				close(cBreaked)
-			}
-		}()
-	}
-
-	select {
-	case <-cBreaked:
-		return true
-	case v, ok := <-cSelect:
-		close(cBreaked)
+	v, ok, breaked := CSelect(cSelect, cBreaks...)
+	if !breaked {
 		f(v, ok)
-		return false
 	}
+	return breaked
 }
 
-// Sleep breakable sleep (blocked)
+// Sleep 等待指定时长或任一中断，并返回是否被中断。
 func Sleep(d time.Duration, cBreaks ...<-chan struct{}) (breaked bool) {
 	t := time.NewTimer(d)
 	defer t.Stop()
@@ -72,7 +53,7 @@ func Sleep(d time.Duration, cBreaks ...<-chan struct{}) (breaked bool) {
 	return
 }
 
-// After do when done is closed (unblocked)
+// After 异步等待 done 可读或关闭时调用 f；若先收到中断则结束等待，不调用 f。
 func After[T any, F ft[T]](done <-chan T, f F, cBreaks ...<-chan struct{}) {
 	go SelectDo(done, func(t T, ok bool) {
 		af := any(f)
