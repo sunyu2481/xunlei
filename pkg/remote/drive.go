@@ -381,16 +381,20 @@ func (c *Client) taskPage(ctx context.Context, target, page string) (TaskPage, e
 				progress = 100 * float64(done) / float64(size)
 			}
 		}
-		// 文件已下载完但仍在校验时，按原版面板显示校验进度。
-		if hasChecked && checked >= 0 && size > 0 && done == size {
-			progress = 100 * float64(checked) / float64(size)
-		}
 		if math.IsNaN(progress) || math.IsInf(progress, 0) {
 			progress = 0
 		}
 		progress = min(100, max(0, progress))
+		// 先补足下载字节；下载完成时直接保留总大小，避免浮点转换损失精度。
 		if !hasDone && size > 0 {
-			done = int64(float64(size) * progress / 100)
+			done = size
+			if progress < 100 {
+				done = int64(float64(size) * progress / 100)
+			}
+		}
+		// 文件已下载完但仍在校验时，按原版面板显示校验进度。
+		if hasChecked && checked >= 0 && size > 0 && done == size {
+			progress = min(100, 100*float64(checked)/float64(size))
 		}
 		if str(t["phase"]) == "PHASE_TYPE_COMPLETE" {
 			progress, done = 100, size
