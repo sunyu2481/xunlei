@@ -10,13 +10,19 @@ type IntT interface {
 	~int | ~int8 | ~int16 | ~int32 | ~int64
 }
 
+// StrParser 适配整数解析函数，目标类型无法表示结果时返回 strconv.ErrRange。
 func StrParser[R UintT | IntT, T1, T2 any, R64 uint64 | int64](f func(string, T1, T2) (R64, error), t1 T1, t2 T2) func(string) (R, error) {
 	return func(s string) (R, error) {
 		r, err := f(s, t1, t2)
 		if err != nil {
 			return 0, err
 		}
-		return R(r), nil
+		value := R(r)
+		// 往返转换检查丢失的高位，符号检查防止同位宽转换后仍能还原原始位模式。
+		if R64(value) != r || (r < 0) != (value < 0) {
+			return 0, &strconv.NumError{Func: "StrParser", Num: s, Err: strconv.ErrRange}
+		}
+		return value, nil
 	}
 }
 
@@ -34,5 +40,8 @@ var (
 )
 
 func String[T IntT | UintT](v T) string {
-	return strconv.FormatInt(int64(v), 10)
+	if v < 0 {
+		return strconv.FormatInt(int64(v), 10)
+	}
+	return strconv.FormatUint(uint64(v), 10)
 }
