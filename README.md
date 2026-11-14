@@ -64,7 +64,7 @@ ghcr.io/cnk3x/xunlei:4.0.0-beta
 | `--dashboard_username` | `XL_DASHBOARD_USERNAME`、`XL_BA_USER` | 空 | 网页访问的用户名；只设置密码时为 `admin` |
 | `--dashboard_password` | `XL_DASHBOARD_PASSWORD`、`XL_BA_PASSWORD` | 空，不启用访问认证 | 网页访问的密码 |
 | `-r`、`--root` | `XL_ROOT`、`XL_CHROOT` | 当前目录下的 `xunlei` | 主目录，迅雷在此目录内隔离运行 |
-| `-d`、`--dir_download` | `XL_DIR_DOWNLOAD` | `<主目录>/downloads` | 下载保存目录，可多次指定或用冒号 `:` 分隔，必须位于主目录内 |
+| `-d`、`--dir_download` | `XL_DIR_DOWNLOAD` | `<主目录>/downloads` | 每个参数指定一个下载目录，可重复；环境变量用冒号 `:` 分隔，目录必须位于主目录内 |
 | `-D`、`--dir_data` | `XL_DIR_DATA` | `<主目录>/data` | 程序数据目录，必须位于主目录内且可写；其下 `.drive` 保存登录账号和下载进度 |
 | `-u`、`--uid` | `XL_UID`、`UID` | `0` | 运行迅雷的用户 ID |
 | `-g`、`--gid` | `XL_GID`、`GID` | `0` | 运行迅雷的用户组 ID |
@@ -78,6 +78,10 @@ ghcr.io/cnk3x/xunlei:4.0.0-beta
 | `--log` | `XL_LOG` | `info` | 日志等级，可选 `debug`、`info`、`warn`、`error` |
 
 `--chroot` 已弃用，请改用 `--root`。布尔类型的环境变量可使用 `true`、`false`、`1`、`0`。UID/GID 只接受 `0` 到 `4294967294`，其中 `0` 明确表示 root 用户或组；负数、系统保留编号和超范围数值会在准备环境前被拒绝。
+
+数据和下载目录必须是主目录的子目录，不能使用主目录本身或越界路径；允许 `.data` 等隐藏目录。路径中的已有组件必须是真实目录，不接受符号链接。检查在限速、挂载、创建目录、清理运行状态及修改属主之前完成。
+
+下载目录中的逗号和空白按原字符保留，例如 `-d '/xunlei/甲,乙' -d '/xunlei/另一个目录'`。套件使用冒号拼接下载目录列表，因此单个下载目录名不能含冒号；命令行中的冒号不会被拆分，会直接报错。环境变量仍使用 `XL_DIR_DOWNLOAD=/xunlei/甲,乙:/xunlei/另一个目录` 表示多个目录，不能包含空列表项。
 
 #### 容器内的默认值
 

@@ -64,7 +64,7 @@ func bindConfig(cfg *Config) (err error) {
 	flags.Var(&cfg.DashboardUsername, "dashboard_username", "", "网页访问的用户名", "XL_DASHBOARD_USERNAME", "XL_BA_USER")
 	flags.Var(&cfg.DashboardPassword, "dashboard_password", "", "网页访问的密码", "XL_DASHBOARD_PASSWORD", "XL_BA_PASSWORD")
 
-	flags.Var(&cfg.DirDownload, "dir_download", "d", "下载保存文件夹，可多次指定，需确保有权限访问", "XL_DIR_DOWNLOAD")
+	flags.Var(&cfg.DirDownload, "dir_download", "d", "下载保存文件夹，每个参数指定一个目录，可重复，目录名不能含冒号", "XL_DIR_DOWNLOAD")
 	flags.Var(&cfg.DirData, "dir_data", "D", "程序数据保存文件夹，其下'.drive'文件夹中，存储了登录的账号，下载进度等信息", "XL_DIR_DATA")
 	flags.Var(&cfg.Uid, "uid", "u", "运行迅雷的用户ID", "XL_UID", "UID")
 	flags.Var(&cfg.Gid, "gid", "g", "运行迅雷的用户组ID", "XL_GID", "GID")
@@ -103,10 +103,15 @@ func bindConfig(cfg *Config) (err error) {
 
 	var dirDownloads []string
 	for _, dir := range cfg.DirDownload {
-		for d := range strings.SplitSeq(dir, ":") {
-			if d = strings.TrimSpace(d); d != "" {
-				dirDownloads = append(dirDownloads, d)
+		dirs := []string{dir}
+		if !flags.Changed("dir_download") {
+			dirs = strings.Split(dir, ":")
+		}
+		for _, d := range dirs {
+			if d == "" {
+				return fmt.Errorf("下载目录列表不能包含空路径")
 			}
+			dirDownloads = append(dirDownloads, d)
 		}
 	}
 	cfg.DirDownload = dirDownloads
@@ -119,5 +124,5 @@ func bindConfig(cfg *Config) (err error) {
 		slog.Error("无法获取绝对路径", "dir_download", cfg.DirDownload, "err", err)
 		return
 	}
-	return
+	return cfg.validatePaths()
 }

@@ -105,7 +105,7 @@ func VarFlag[T any](fSet *pflag.FlagSet, v T, name, short, usage string, env ...
 	case *[]net.IPNet:
 		fSet.IPNetSliceVarP(x, name, short, *x, usage)
 	case *[]string:
-		fSet.StringSliceVarP(x, name, short, *x, usage)
+		fSet.StringArrayVarP(x, name, short, *x, usage)
 	case *[]int:
 		fSet.IntSliceVarP(x, name, short, *x, usage)
 	case *[]int32:

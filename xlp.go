@@ -58,6 +58,9 @@ var (
 // 还在宿主机环境操作
 func Before(cfg Config) func(ctx context.Context) (func(), error) {
 	return func(ctx context.Context) (undo func(), err error) {
+		if err := cfg.validatePaths(); err != nil {
+			return nil, err
+		}
 		bq := utils.BackQueue(&undo, &err)
 		defer bq.ErrDefer()
 
@@ -105,15 +108,7 @@ func Run(cfg Config) func(ctx context.Context) error {
 		ctx, cancel := context.WithCancel(ctx)
 		defer cancel()
 
-		fixPath := func(s string) (rel string, err error) {
-			if rel, err = filepath.Rel(cfg.Root, s); err != nil {
-				return "", err
-			}
-			if strings.HasPrefix(rel, ".") {
-				return "", fmt.Errorf("%s is not a subpath of %s", rel, cfg.Root)
-			}
-			return "/" + rel, nil
-		}
+		fixPath := func(s string) (string, error) { return insidePath(cfg.Root, s) }
 
 		dirDownload := cfg.DirDownload
 		if dirDownload, err = utils.Replace(dirDownload, fixPath); err != nil {
