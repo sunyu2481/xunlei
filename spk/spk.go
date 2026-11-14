@@ -23,6 +23,9 @@ var versionPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
 
 // Extract 在受限临时目录验证归档，只安装当前架构及版本需要的普通文件。
 func Extract(ctx context.Context, src io.Reader, dstDir string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	root, err := openDestination(dstDir)
 	if err != nil {
 		return err
@@ -57,6 +60,9 @@ func Extract(ctx context.Context, src io.Reader, dstDir string) error {
 			}
 			if h.Typeflag != tar.TypeReg {
 				return fmt.Errorf("套件文件 %q 不是普通文件", name)
+			}
+			if h.Size == 0 {
+				return fmt.Errorf("套件文件 %q 为空", name)
 			}
 			if _, exists := files[name]; exists {
 				return fmt.Errorf("套件文件 %q 重复", name)
@@ -103,7 +109,7 @@ func Extract(ctx context.Context, src io.Reader, dstDir string) error {
 			return fmt.Errorf("套件缺少文件 %q", name)
 		}
 	}
-	if err := installFiles(root, stage, names, files); err != nil {
+	if err := installFiles(ctx, root, stage, names, files); err != nil {
 		return err
 	}
 	slog.DebugContext(ctx, "套件提取完成", "target_dir", dstDir, "version", version)
@@ -137,7 +143,10 @@ func packageFile(name string) bool {
 // 以下为归档遍历和解码接口。
 
 func Walk(ctx context.Context, src io.Reader, walk WalkFunc, decoder ...Decoder) (err error) {
-	dr := io.NopCloser(src)
+	if err = ctx.Err(); err != nil {
+		return err
+	}
+	dr := io.NopCloser(contextReader{ctx, src})
 
 	for _, d := range decoder {
 		if d != nil {
@@ -148,7 +157,10 @@ func Walk(ctx context.Context, src io.Reader, walk WalkFunc, decoder ...Decoder)
 		}
 	}
 
-	for tr := tar.NewReader(dr); ; {
+	for tr := tar.NewReader(contextReader{ctx, dr}); ; {
+		if err = ctx.Err(); err != nil {
+			return err
+		}
 		hdr, e := tr.Next()
 		if err = e; err != nil {
 			break
@@ -161,7 +173,26 @@ func Walk(ctx context.Context, src io.Reader, walk WalkFunc, decoder ...Decoder)
 	if err == io.EOF {
 		err = nil
 	}
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
 	return
+}
+
+type contextReader struct {
+	ctx context.Context
+	r   io.Reader
+}
+
+func (r contextReader) Read(p []byte) (int, error) {
+	if err := r.ctx.Err(); err != nil {
+		return 0, err
+	}
+	n, err := r.r.Read(p)
+	if r.ctx.Err() != nil {
+		return n, r.ctx.Err()
+	}
+	return n, err
 }
 
 func Xz(src io.Reader) (io.ReadCloser, error) {

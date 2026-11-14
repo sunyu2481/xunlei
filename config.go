@@ -29,7 +29,7 @@ type Config struct {
 	Uid              int      //运行迅雷的用户ID
 	Gid              int      //运行迅雷的用户组ID
 	PreventUpdate    bool     //阻止更新
-	SpkUrl           string   //下载链接
+	SpkUrl           string   //HTTPS 或本地套件地址，可附加可信摘要
 	SpkForceDownload bool     //是否强制下载
 	UploadLimit      uint64   //网卡总出站限速，单位 KiB/s，零表示不限速
 	UploadInterface  string   //上传限速使用的容器网卡
@@ -59,7 +59,7 @@ func ConfigBind(cfg *Config) (err error) {
 	flags.Var(&cfg.Gid, "gid", "g", "运行迅雷的用户组ID", "XL_GID", "GID")
 	flags.Var(&cfg.PreventUpdate, "prevent_update", "", "阻止更新", "XL_PREVENT_UPDATE")
 	flags.Var(&cfg.Root, "root", "r", "主目录", "XL_ROOT", "XL_CHROOT")
-	flags.Var(&cfg.SpkUrl, "spk", "", "SPK 下载链接", "XL_SPK")
+	flags.Var(&cfg.SpkUrl, "spk", "", "SPK 来源：HTTPS 或本地 file URL，可附加 #sha256=摘要", "XL_SPK")
 	flags.Var(&cfg.SpkForceDownload, "spk_force_download", "F", "强制下载", "XL_SPK_FORCE_DOWNLOAD")
 	flags.Var(&cfg.UploadLimit, "upload_limit", "", "容器总出站限速，单位 KiB/s，0 表示不限速，需要 NET_ADMIN 权限", "XL_UPLOAD_LIMIT")
 	flags.Var(&cfg.UploadInterface, "upload_interface", "", "上传限速使用的容器 veth 网卡，只支持桥接网络", "XL_UPLOAD_INTERFACE")

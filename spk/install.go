@@ -1,6 +1,7 @@
 package spk
 
 import (
+	"context"
 	"crypto/rand"
 	"errors"
 	"fmt"
@@ -96,7 +97,10 @@ func removeDirectoryAt(parent *os.File, name string) {
 	syscall.Syscall(syscall.SYS_UNLINKAT, parent.Fd(), uintptr(unsafe.Pointer(p)), atRemoveDir)
 }
 
-func installFiles(root, stage *os.File, names []string, files map[string]string) error {
+func installFiles(ctx context.Context, root, stage *os.File, names []string, files map[string]string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	dirs := make(map[string]*os.File)
 	defer func() {
 		for _, dir := range dirs {
@@ -134,6 +138,9 @@ func installFiles(root, stage *os.File, names []string, files map[string]string)
 		}
 	}
 	for _, name := range names {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		temp := files[name]
 		f, err := openFileAt(stage, temp, os.O_RDONLY, 0)
 		if err != nil {

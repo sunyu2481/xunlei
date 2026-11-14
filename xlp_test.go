@@ -3,6 +3,7 @@ package xunlei
 import (
 	"context"
 	"errors"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -31,6 +32,7 @@ func Test准备环境传播改属主错误(t *testing.T) {
 				}
 			}
 			cfg := Config{Root: root, DirData: filepath.Join(root, "数据"), Uid: os.Getuid() + 1, Gid: os.Getgid()}
+			cfg.SpkUrl = (&url.URL{Scheme: "file", Path: filepath.Join(root, "仅复用缓存.spk")}).String()
 			want := syscall.EPERM
 			if recursive {
 				cfg.Uid = os.Getuid()
