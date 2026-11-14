@@ -1,10 +1,12 @@
 // 本文件改编自 Go 标准库的网页通用网关处理器，版权归原作者所有。
-// 原始许可见 LICENSE.go-cgi；扩展部分用于显式设置子进程身份。
+// 原始许可见 LICENSE.go-cgi；扩展部分用于子进程身份与取消回收。
 package web
 
 import (
 	"bufio"
+	"context"
 	"fmt"
+	"github.com/cnk3x/xunlei/pkg/cmdx"
 	"io"
 	"log"
 	"net"
@@ -12,18 +14,19 @@ import (
 	"net/http/cgi"
 	"net/textproto"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 )
 
 // CGIHandler 保留标准库的请求和响应语义，在执行网关程序前设置完整凭据。
 type CGIHandler struct {
 	cgi.Handler
 	Credential *syscall.Credential
+	Timeout    time.Duration // 单次网关请求期限，默认九十秒
 }
 
 var trailingPort = regexp.MustCompile(`:([0-9]+)$`)
@@ -163,35 +166,52 @@ func (h *CGIHandler) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 		cwd = "."
 	}
 
-	internalError := func(err error) {
-		rw.WriteHeader(http.StatusInternalServerError)
-		h.printf("CGI error: %v", err)
+	timeout := h.Timeout
+	if timeout <= 0 {
+		timeout = 90 * time.Second
 	}
-
-	cmd := &exec.Cmd{
-		Path:        path,
-		Args:        append([]string{h.Path}, h.Args...),
-		Dir:         cwd,
-		Env:         env,
-		Stderr:      h.stderr(),
-		SysProcAttr: &syscall.SysProcAttr{Credential: h.Credential},
-	}
+	ctx, cancel := context.WithTimeout(req.Context(), timeout)
+	defer cancel()
+	stdoutRead, stdoutWrite := io.Pipe()
+	finished, watched := make(chan struct{}), make(chan struct{})
+	var stdin io.Reader
 	if req.ContentLength != 0 {
-		cmd.Stdin = req.Body
+		stdin = req.Body
 	}
-	stdoutRead, err := cmd.StdoutPipe()
-	if err != nil {
-		internalError(err)
-		return
-	}
-
-	err = cmd.Start()
-	if err != nil {
-		internalError(err)
-		return
-	}
-	defer cmd.Wait()
-	defer stdoutRead.Close()
+	go func() {
+		defer close(finished)
+		err := cmdx.Run(ctx, path, cmdx.Args(h.Args...), cmdx.Dir(cwd), cmdx.Env(env),
+			cmdx.Stdin(stdin), cmdx.Stdout(stdoutWrite), cmdx.Stderr(h.stderr()),
+			cmdx.May(func(c *cmdx.Cmd) {
+				// 网关路径按指定工作目录解释，沿用标准库语义，不通过 PATH 查找。
+				c.Path = path
+				c.Err = nil
+				c.Args[0] = h.Path
+				c.SysProcAttr.Credential = h.Credential
+			}))
+		stdoutWrite.CloseWithError(err)
+	}()
+	stopWatch := context.AfterFunc(ctx, func() {
+		defer close(watched)
+		// 解除管道及慢速请求正文的等待，使进程取消可以完成输出回收。
+		controller := http.NewResponseController(rw)
+		controller.SetReadDeadline(time.Now())
+		controller.SetWriteDeadline(time.Now())
+		stdoutRead.CloseWithError(ctx.Err())
+		if req.Body != nil {
+			req.Body.Close()
+		}
+	})
+	defer func() {
+		// 正常完成时先停止监控，避免取消清理误伤已经生成的响应。
+		stopped := stopWatch()
+		cancel()
+		stdoutRead.Close()
+		<-finished
+		if !stopped {
+			<-watched
+		}
+	}()
 
 	linebody := bufio.NewReaderSize(stdoutRead, 1024)
 	headers := make(http.Header)
@@ -279,10 +299,10 @@ func (h *CGIHandler) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 
 	rw.WriteHeader(statusCode)
 
-	_, err = io.Copy(rw, linebody)
+	_, err := io.Copy(rw, linebody)
 	if err != nil {
 		h.printf("cgi: copy error: %v", err)
-		cmd.Process.Kill()
+		cancel()
 	}
 }
 

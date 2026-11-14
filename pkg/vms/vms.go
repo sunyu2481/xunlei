@@ -2,6 +2,7 @@ package vms
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -44,33 +45,39 @@ func Execute(ctx context.Context, execOpts ...Option) (err error) {
 		return opts.userErr
 	}
 
+	cleanup := func(undo func()) {
+		if !errors.Is(err, utils.ErrUnsafeCleanup) && undo != nil {
+			undo()
+		}
+	}
+
 	if opts.root != "" && opts.root != "/" {
 		//mounts
 		unmounts, e := sys.Mounts(ctx, opts.mounts)
 		if err = e; err != nil {
 			return
 		}
-		defer unmounts()
+		defer cleanup(unmounts)
 
 		//binds
 		unbinds, e := sys.BindRs(ctx, opts.root, opts.binds)
 		if err = e; err != nil {
 			return
 		}
-		defer unbinds()
+		defer cleanup(unbinds)
 
 		//links
 		unlinks, e := sys.LinkRs(ctx, opts.root, opts.links)
 		if err = e; err != nil {
 			return
 		}
-		defer unlinks()
+		defer cleanup(unlinks)
 
 		unSymlinks, e := sys.Symlinks(ctx, opts.symbols)
 		if err = e; err != nil {
 			return
 		}
-		defer unSymlinks()
+		defer cleanup(unSymlinks)
 	}
 
 	//before
@@ -79,12 +86,15 @@ func Execute(ctx context.Context, execOpts ...Option) (err error) {
 		if err = e; err != nil {
 			return
 		}
-		defer beforeRestore()
+		defer cleanup(beforeRestore)
 	}
 
 	//chroot
 	err = chrootRun(ctx, opts.root, opts.run, opts)
 
+	if errors.Is(err, utils.ErrUnsafeCleanup) {
+		return err
+	}
 	if err != nil && opts.wait {
 		slog.ErrorContext(ctx, "chroot run", "err", err.Error())
 		slog.WarnContext(ctx, "调试模式，在有错误发生的情况下，会一直不退出，等待人工调试，请按 ctrl+c 退出.")
@@ -106,7 +116,11 @@ func chrootRun(ctx context.Context, root string, run func(ctx context.Context) e
 	if err = e; err != nil {
 		return
 	}
-	defer chRootBack()
+	defer func() {
+		if !errors.Is(err, utils.ErrUnsafeCleanup) {
+			chRootBack()
+		}
+	}()
 
 	err = run(cmdx.WithCredential(ctx, uint32(opts.uid), uint32(opts.gid)))
 	return

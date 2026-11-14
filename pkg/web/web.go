@@ -3,9 +3,7 @@ package web
 
 import (
 	"cmp"
-	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -21,6 +19,7 @@ type Middleware = func(http.Handler) http.Handler
 // Mux 表示一个HTTP请求多路复用器，支持中间件处理链
 type Mux struct {
 	chi.Router                   // 当前多路复用器
+	Timeouts   Timeouts          // 连接与服务关闭期限
 	onShutdown func()            // 关闭时执行的回调函数
 	onStarted  func(addr string) // 监听启动的回调
 }
@@ -43,44 +42,6 @@ func (mux *Mux) OnStarted(fn func(addr string)) { mux.onStarted = fn }
 func (mux *Mux) BasicAuth(user, pwd string) *Mux { mux.Use(BasicAuth(user, pwd)); return mux }
 
 func (mux *Mux) Recoverer() *Mux { mux.Use(Recoverer); return mux }
-
-// Run 启动HTTP服务器并监听指定地址
-//   - ctx: 上下文对象
-//   - addr: 监听地址
-//
-// 返回启动错误（如果有的话）
-func (mux *Mux) Run(ctx context.Context, addr string) (err error) {
-	s := &http.Server{
-		Addr: addr, Handler: mux,
-		BaseContext: func(l net.Listener) context.Context {
-			if mux.onStarted != nil {
-				mux.onStarted(l.Addr().String())
-			}
-			return ctx
-		},
-	}
-
-	done := make(chan struct{})
-	defer close(done)
-
-	go func() {
-		select {
-		case <-done:
-			return
-		case <-ctx.Done():
-			s.Shutdown(context.Background())
-		}
-	}()
-
-	if err = s.ListenAndServe(); errors.Is(err, http.ErrServerClosed) {
-		err = nil
-	}
-
-	if mux.onShutdown != nil {
-		mux.onShutdown()
-	}
-	return
-}
 
 // Redirect 创建重定向处理器
 //   - to: 重定向目标URL

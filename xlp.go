@@ -2,6 +2,7 @@ package xunlei
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -126,37 +127,35 @@ func Run(cfg Config) func(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		defer func() { cancel(); remoteClient.Close() }()
-		go webRun(log.Prefix(ctx, "web"), envs, cfg, remoteClient, cancel)
 
 		panCtx := log.Prefix(ctx, "pan")
-		return cmdx.Run(ctx, FILE_PAN_XUNLEI_CLI,
-			cmdx.Flags(
-				"-launcher_listen", "unix://"+SOCK_LAUNCHER_LISTEN,
-				"-pid", FILE_PID,
-				"-update_url", utils.Iif(cfg.PreventUpdate, "null", ""),
-				"-logfile", cfg.LauncherLogFile,
-			),
-			cmdx.Dir(DIR_SYNOPKG_WORK),
-			cmdx.Env(envs),
-			cmdx.LineErr(func(s string) { slog.DebugContext(panCtx, "[err] "+s) }),
-			cmdx.LineOut(func(s string) { slog.DebugContext(panCtx, "[std] "+s) }),
-			cmdx.PreStart(func(c *cmdx.Cmd) error {
-				ctx := log.Prefix(ctx, "check")
-				slog.DebugContext(ctx, "子进程身份", "uid", cfg.Uid, "gid", cfg.Gid, "parent_uid", os.Geteuid(), "parent_gid", os.Getegid())
-				return nil
-			}),
-			cmdx.OnStarted(func(c *cmdx.Cmd) error {
-				slog.InfoContext(ctx, "started", "cmdline", c.String(), "dir", c.Dir, "pid", c.Process.Pid)
-				return nil
-			}),
-			cmdx.OnExit(func(c *cmdx.Cmd) error { cancel(); return cleanExit(DIR_VAR) }),
-		)
+		return runServices(ctx, func(ctx context.Context) error {
+			return cmdx.Run(ctx, FILE_PAN_XUNLEI_CLI,
+				cmdx.Flags(
+					"-launcher_listen", "unix://"+SOCK_LAUNCHER_LISTEN,
+					"-pid", FILE_PID,
+					"-update_url", utils.Iif(cfg.PreventUpdate, "null", ""),
+					"-logfile", cfg.LauncherLogFile,
+				),
+				cmdx.Dir(DIR_SYNOPKG_WORK),
+				cmdx.Env(envs),
+				cmdx.LineErr(func(s string) { slog.DebugContext(panCtx, "[err] "+s) }),
+				cmdx.LineOut(func(s string) { slog.DebugContext(panCtx, "[std] "+s) }),
+				cmdx.PreStart(func(c *cmdx.Cmd) error {
+					ctx := log.Prefix(ctx, "check")
+					slog.DebugContext(ctx, "子进程身份", "uid", cfg.Uid, "gid", cfg.Gid, "parent_uid", os.Geteuid(), "parent_gid", os.Getegid())
+					return nil
+				}),
+				cmdx.OnStarted(func(c *cmdx.Cmd) error {
+					slog.InfoContext(ctx, "started", "cmdline", c.String(), "dir", c.Dir, "pid", c.Process.Pid)
+					return nil
+				}),
+			)
+		}, func(ctx context.Context) error { return webRun(log.Prefix(ctx, "web"), envs, cfg, remoteClient) }, remoteClient.Close, func() error { return cleanExit(DIR_VAR) })
 	}
 }
 
-func webRun(ctx context.Context, env []string, cfg Config, remoteClient *remote.Client, onDone func()) {
-	defer onDone()
+func webRun(ctx context.Context, env []string, cfg Config, remoteClient *remote.Client) (err error) {
 	mux := web.NewMux()
 	mux.Recoverer()
 	mux.OnStarted(func(addr string) { slog.InfoContext(ctx, "started", "listen", addr) })
@@ -169,10 +168,18 @@ func webRun(ctx context.Context, env []string, cfg Config, remoteClient *remote.
 	)
 
 	lErr := cmdx.LineWriter(func(s string) { slog.DebugContext(ctx, "[cgi] [err] "+s) })
-	defer lErr.Close()
+	defer func() {
+		if !errors.Is(err, utils.ErrUnsafeCleanup) {
+			err = errors.Join(err, lErr.Close())
+		}
+	}()
 
 	lLog := cmdx.LineWriter(func(s string) { slog.DebugContext(ctx, "[cgi] [log] "+s) })
-	defer lLog.Close()
+	defer func() {
+		if !errors.Is(err, utils.ErrUnsafeCleanup) {
+			err = errors.Join(err, lLog.Close())
+		}
+	}()
 
 	const CGI_PATH = "/webman/3rdparty/" + SYNOPKG_PKGNAME + "/index.cgi/"
 	mux.With(web.BasicAuth(cfg.DashboardUsername, cfg.DashboardPassword)).Mount(CGI_PATH, remoteweb.Panel(&web.CGIHandler{Handler: cgi.Handler{
@@ -193,12 +200,13 @@ func webRun(ctx context.Context, env []string, cfg Config, remoteClient *remote.
 	mux.Get("/webman", web.Redirect(CGI_PATH, true))
 	mux.Handle("/webman/login.cgi", web.Blob(fmt.Sprintf(`{"SynoToken":%q,"result":"success","success":true}`, utils.RandText(13)), "application/json", http.StatusOK))
 
-	err := mux.Run(ctx, web.Address(cfg.Ip, cfg.Port))
+	err = mux.Run(ctx, web.Address(cfg.Ip, cfg.Port))
 	if err != nil {
 		slog.WarnContext(ctx, "done", "err", err.Error())
 	} else {
 		slog.InfoContext(ctx, "done")
 	}
+	return err
 }
 
 func mockEnv(dirData, dirDownload string) []string {
