@@ -18,7 +18,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/cnk3x/xunlei/pkg/fo"
 	"github.com/cnk3x/xunlei/pkg/utils"
 )
 
@@ -169,32 +168,4 @@ func extractSource(ctx context.Context, src io.Reader, dir string, checksum []by
 		return err
 	}
 	return Extract(ctx, f, dir)
-}
-
-func allExists(ctx context.Context, dir string) bool {
-	files := []string{
-		filepath.Join(dir, "bin/bin/version"),
-		filepath.Join(dir, "bin/bin/xunlei-pan-cli-launcher.{arch}"),
-		filepath.Join(dir, "bin/bin/xunlei-pan-cli.{version}.{arch}"),
-		filepath.Join(dir, "ui/index.cgi"),
-	}
-
-	version := fo.Cat(files[0], true)
-	if version == "" {
-		slog.DebugContext(ctx, "check spk fail, version not found")
-		return false
-	}
-	slog.DebugContext(ctx, "check spk", "version", version)
-
-	repl := strings.NewReplacer("{arch}", runtime.GOARCH, "{version}", version)
-	for _, f := range files[1:] {
-		f = repl.Replace(f)
-		stat, err := os.Stat(f)
-		if err != nil || !stat.Mode().IsRegular() {
-			slog.DebugContext(ctx, "check spk fail", "file", f, "err", err)
-			return false
-		}
-		slog.DebugContext(ctx, "check spk", "perm", stat.Mode().Perm().String(), "size", utils.HumanBytes(stat.Size()), "modtime", stat.ModTime(), "file", f)
-	}
-	return true
 }

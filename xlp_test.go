@@ -1,6 +1,8 @@
 package xunlei
 
 import (
+	"archive/tar"
+	"bytes"
 	"context"
 	"errors"
 	"net/url"
@@ -12,6 +14,9 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/cnk3x/xunlei/spk"
+	"github.com/ulikunitz/xz"
 )
 
 func Test准备环境传播改属主错误(t *testing.T) {
@@ -22,15 +27,7 @@ func Test准备环境传播改属主错误(t *testing.T) {
 		t.Run(map[bool]string{false: "单层修改失败", true: "递归遍历失败"}[recursive], func(t *testing.T) {
 			root := t.TempDir()
 			target := filepath.Join(root, DIR_SYNOPKG_PKGDEST)
-			for _, file := range []string{"bin/bin/version", "bin/bin/xunlei-pan-cli-launcher." + runtime.GOARCH, "bin/bin/xunlei-pan-cli.测试版本." + runtime.GOARCH, "ui/index.cgi"} {
-				path := filepath.Join(target, file)
-				if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
-					t.Fatal(err)
-				}
-				if err := os.WriteFile(path, []byte("测试版本"), 0600); err != nil {
-					t.Fatal(err)
-				}
-			}
+			installTestPackage(t, target)
 			cfg := Config{Root: root, DirData: filepath.Join(root, "数据"), Uid: os.Getuid() + 1, Gid: os.Getgid()}
 			cfg.SpkUrl = (&url.URL{Scheme: "file", Path: filepath.Join(root, "仅复用缓存.spk")}).String()
 			want := syscall.EPERM
@@ -51,6 +48,44 @@ func Test准备环境传播改属主错误(t *testing.T) {
 				t.Fatalf("准备失败未执行回滚：%v", err)
 			}
 		})
+	}
+}
+
+func installTestPackage(t *testing.T, target string) {
+	t.Helper()
+	var compressed, archive bytes.Buffer
+	xw, err := xz.NewWriter(&compressed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tw := tar.NewWriter(xw)
+	for _, file := range []string{"bin/bin/version", "bin/bin/xunlei-pan-cli-launcher." + runtime.GOARCH, "bin/bin/xunlei-pan-cli.test-1.0." + runtime.GOARCH, "ui/index.cgi"} {
+		content := []byte("test-1.0")
+		if err := tw.WriteHeader(&tar.Header{Name: file, Size: int64(len(content)), Mode: 0755}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tw.Write(content); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := xw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	outer := tar.NewWriter(&archive)
+	if err := outer.WriteHeader(&tar.Header{Name: "package.tgz", Size: int64(compressed.Len()), Mode: 0644}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := outer.Write(compressed.Bytes()); err != nil {
+		t.Fatal(err)
+	}
+	if err := outer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := spk.Extract(context.Background(), &archive, target); err != nil {
+		t.Fatal(err)
 	}
 }
 

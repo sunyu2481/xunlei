@@ -3,6 +3,7 @@ package spk
 import (
 	"archive/tar"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -95,7 +96,7 @@ func Extract(ctx context.Context, src io.Reader, dstDir string) error {
 		return err
 	}
 	b, err := io.ReadAll(io.LimitReader(f, 256))
-	f.Close()
+	err = errors.Join(err, f.Close())
 	if err != nil {
 		return err
 	}
@@ -103,13 +104,17 @@ func Extract(ctx context.Context, src io.Reader, dstDir string) error {
 	if len(b) == 256 || !versionPattern.MatchString(version) {
 		return fmt.Errorf("套件版本无效")
 	}
-	names := []string{launcherFile, "bin/bin/xunlei-pan-cli." + version + "." + runtime.GOARCH, gatewayFile, versionFile}
+	names := requiredFiles(version)
 	for _, name := range names {
 		if _, ok := files[name]; !ok {
 			return fmt.Errorf("套件缺少文件 %q", name)
 		}
 	}
-	if err := installFiles(ctx, root, stage, names, files); err != nil {
+	if err := stageManifest(ctx, stage, version, names, files); err != nil {
+		return err
+	}
+	// 清单最后发布，启动时只有内容与完整清单一致才会复用缓存。
+	if err := installFiles(ctx, root, stage, append(names, manifestFile), files); err != nil {
 		return err
 	}
 	slog.DebugContext(ctx, "套件提取完成", "target_dir", dstDir, "version", version)
@@ -153,7 +158,7 @@ func Walk(ctx context.Context, src io.Reader, walk WalkFunc, decoder ...Decoder)
 			if dr, err = d(dr); err != nil {
 				return
 			}
-			defer dr.Close()
+			defer func(r io.ReadCloser) { err = errors.Join(err, r.Close()) }(dr)
 		}
 	}
 
@@ -162,21 +167,18 @@ func Walk(ctx context.Context, src io.Reader, walk WalkFunc, decoder ...Decoder)
 			return err
 		}
 		hdr, e := tr.Next()
-		if err = e; err != nil {
-			break
+		if e == io.EOF {
+			// tar 的结束块不代表压缩流结束，必须继续读取以验证校验和、索引和尾部。
+			_, err = io.Copy(io.Discard, contextReader{ctx, dr})
+			return err
+		}
+		if e != nil {
+			return e
 		}
 		if err = walk(tr, hdr); err != nil {
-			break
+			return err
 		}
 	}
-
-	if err == io.EOF {
-		err = nil
-	}
-	if ctx.Err() != nil {
-		return ctx.Err()
-	}
-	return
 }
 
 type contextReader struct {

@@ -22,14 +22,16 @@ func NewFile(ctx context.Context, fn string, process fo.Process, fopts ...fo.Opt
 	}
 	bq.Put(mdUndo)
 
-	if err = fo.OpenWrite(fn, process, append(fopts, fo.FlagExcl(false))...); err == nil {
+	if err = fo.AtomicWrite(fn, process, append(fopts, fo.FlagExcl(false))...); err == nil {
 		bq.Put(newRm(ctx, fn, "rmfile"))
 		slog.DebugContext(ctx, "file", "path", fn)
 	}
 
 	if exists := os.IsExist(err); err != nil && exists {
-		err = nil
-		slog.DebugContext(ctx, "file skip", "path", fn, "cause", "exists")
+		err = fo.MatchFile(fn, process, fopts...)
+		if err == nil {
+			slog.DebugContext(ctx, "文件内容已校验，跳过创建", "path", fn)
+		}
 	}
 
 	if err != nil {
