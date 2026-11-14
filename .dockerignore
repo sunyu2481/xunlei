@@ -1,0 +1,10 @@
+# 只保留镜像定义与双架构程序，排除版本库、本地数据和其他产物。
+**
+!.dockerignore
+!Dockerfile
+!ubuntu.Dockerfile
+!debian.Dockerfile
+!artifacts/
+artifacts/**
+!artifacts/xlp-amd64
+!artifacts/xlp-arm64

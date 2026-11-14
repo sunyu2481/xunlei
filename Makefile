@@ -11,13 +11,8 @@ endif
 
 .PHONY: showTag amd64 arm64 build busybox ubuntu debian
 
-http_proxy := http://host.docker.internal:7890
-https_proxy := http://host.docker.internal:7890
-
 GBuild := CGO_ENABLED=0 GOOS=linux go build -v -ldflags '-s -w'
-DProxy := --build-arg http_proxy=$(http_proxy) --build-arg https_proxy=$(https_proxy)
 DBuild := docker buildx build
-DPush := $(DBuild) --push --platform linux/amd64,linux/arm64
 
 VERSION := "$(shell cat xlp.go | grep "const Version =" | head -n1 | grep -Eo '"[^"]+"' | sed 's/"//g')beta"
 
