@@ -211,7 +211,6 @@ func (c *Client) folders(ctx context.Context, target, parentID, parentPath strin
 }
 
 func cleanDirectory(p string) (string, error) {
-	p = strings.TrimSpace(p)
 	if p == "" {
 		return "", nil
 	}
@@ -226,6 +225,26 @@ func cleanDirectory(p string) (string, error) {
 	return path.Clean(p), nil
 }
 
+func selectFolder(folders []Folder, directory string, minPathLength int) (Folder, error) {
+	var selected Folder
+	ambiguous := false
+	for _, f := range folders {
+		if len(f.Path) <= minPathLength || (directory != f.Path && !strings.HasPrefix(directory, strings.TrimRight(f.Path, "/")+"/")) {
+			continue
+		}
+		if len(f.Path) > len(selected.Path) {
+			selected, ambiguous = f, false
+		} else if f.Path == selected.Path && f.ID != selected.ID {
+			ambiguous = true
+		}
+	}
+	// 完整扫描后再确认最长匹配路径的编号唯一，避免依赖列表顺序。
+	if ambiguous {
+		return Folder{}, failure("directory_required", "所选路径对应多个目录编号，无法确认下载位置，请检查设备目录后重新选择")
+	}
+	return selected, nil
+}
+
 func (c *Client) resolve(ctx context.Context, target, directory string) (Folder, error) {
 	directory, err := cleanDirectory(directory)
 	if err != nil {
@@ -238,13 +257,9 @@ func (c *Client) resolve(ctx context.Context, target, directory string) (Folder,
 	if directory == "" && len(roots) == 1 {
 		return roots[0], nil
 	}
-	var current Folder
-	for _, f := range roots {
-		if directory == f.Path || strings.HasPrefix(directory, strings.TrimRight(f.Path, "/")+"/") {
-			if len(f.Path) > len(current.Path) {
-				current = f
-			}
-		}
+	current, err := selectFolder(roots, directory, 0)
+	if err != nil {
+		return Folder{}, err
 	}
 	if current.ID == "" {
 		return Folder{}, failure("directory_required", "请从设备目录中选择有效的下载位置")
@@ -257,11 +272,9 @@ func (c *Client) resolve(ctx context.Context, target, directory string) (Folder,
 		if e != nil {
 			return Folder{}, e
 		}
-		var next Folder
-		for _, f := range children {
-			if (directory == f.Path || strings.HasPrefix(directory, strings.TrimRight(f.Path, "/")+"/")) && len(f.Path) > len(current.Path) && len(f.Path) > len(next.Path) {
-				next = f
-			}
+		next, e := selectFolder(children, directory, len(current.Path))
+		if e != nil {
+			return Folder{}, e
 		}
 		if next.ID == "" {
 			return Folder{}, failure("directory_required", "所选目录不存在或设备无权访问，请重新选择")
