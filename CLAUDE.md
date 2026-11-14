@@ -10,8 +10,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 - `go test -race ./pkg/remote/... ./pkg/remoteweb/...`：修改远程下载功能后运行。
 - `go run ./cmd/xlp --help`：打印当前全部参数及对应环境变量，不需要 root。README 的参数表为手工维护，同步文档时与此输出核对。
-- `make -C cmd/authenticate_cgi_go build`：重新生成两个架构的嵌入认证程序。CI 每次编译前都会执行这一步，覆盖仓库中提交的二进制。C 版本 `cmd/authenticate_cgi_c` 需要 `aarch64-linux-gnu-gcc`。
-- `make busybox`、`make ubuntu`、`make debian` 只编译 amd64，而 Dockerfile 复制本机架构的 `artifacts/xlp-${TARGETARCH}`；在 arm64 主机上需先执行 `make arm64`。
+- `make -C cmd/authenticate_cgi_go build`：重新生成两个架构的嵌入认证程序。CI 每次编译前都会执行这一步，覆盖仓库中提交的二进制。C 版本 `cmd/authenticate_cgi_c` 需要 `x86_64-linux-gnu-gcc`、`aarch64-linux-gnu-gcc`、对应的静态 C 运行库和 `readelf`，并在替换前校验目标架构。
+- `make busybox`、`make ubuntu`、`make debian` 默认编译并加载宿主架构镜像；指定 `TARGETARCH=amd64` 或 `TARGETARCH=arm64` 时，程序依赖与 Docker 目标平台一起切换。
 - `pkg/netlimit` 的集成测试只在设置 `XL_NETLIMIT_TEST_TARGET` 时运行，会修改 `eth0` 的根队列，只能在专用测试容器中执行。
 
 ## 启动流程

@@ -28,6 +28,10 @@
 
 源码构建使用 Linux 和 Go 1.26.11 或更新的受支持补丁版本；最低工具链版本见 `go.mod`。发布工作流使用该版本，并在构建前运行 `govulncheck` 检查已知可达漏洞。
 
+`make -j2 build` 使用 GNU tar 并行构建两个架构，产物为 `artifacts/xlp-amd64`、`artifacts/xlp-arm64` 及对应压缩包；压缩包内的程序名均为 `xlp`。`make busybox`、`make ubuntu`、`make debian` 默认按 Go 工具链报告的宿主架构编译并加载镜像，也可用 `TARGETARCH=amd64` 或 `TARGETARCH=arm64` 同时指定程序和镜像架构。
+
+C 版认证程序可用 `make -C cmd/authenticate_cgi_c -j2 build` 重建，需要 `x86_64-linux-gnu-gcc`、`aarch64-linux-gnu-gcc` 及对应的静态 C 运行库和 `readelf`。可通过 `CC_AMD64`、`CC_ARM64` 指定其他编译器；编译器目标和 ELF 架构验证通过后才替换嵌入文件。验证构建时可设置 `TARGET` 为临时输出目录中的文件名前缀，避免替换仓库内的认证程序。
+
 ### Docker
 
 #### 镜像

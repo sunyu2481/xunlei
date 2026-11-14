@@ -1,5 +1,15 @@
-# makefile for dev test, production used github action to build
+# 本地开发构建；发布流程使用 GitHub Actions。
 NAME := xlp
+TARGETARCH ?= $(shell go env GOHOSTARCH)
+TARGETARCH := $(TARGETARCH)
+
+ifneq ($(TARGETARCH),amd64)
+ifneq ($(TARGETARCH),arm64)
+$(error TARGETARCH 仅支持 amd64 或 arm64)
+endif
+endif
+
+.PHONY: showTag amd64 arm64 build busybox ubuntu debian
 
 http_proxy := http://host.docker.internal:7890
 https_proxy := http://host.docker.internal:7890
@@ -14,25 +24,17 @@ VERSION := "$(shell cat xlp.go | grep "const Version =" | head -n1 | grep -Eo '"
 showTag::
 	@echo version is $(VERSION)
 
-amd64::
-	GOOS=linux GOARCH=amd64 $(GBuild) -v -o artifacts/xlp-amd64 ./cmd/xlp
-	cp artifacts/xlp-amd64 artifacts/xlp
-	tar -C artifacts -czvf artifacts/xlp-$(VERSION)-linux-amd64.tar.gz xlp
-	rm artifacts/xlp
-
-arm64::
-	GOOS=linux GOARCH=arm64 $(GBuild) -v -o artifacts/xlp-arm64 ./cmd/xlp
-	cp artifacts/xlp-arm64 artifacts/xlp
-	tar -C artifacts -czvf artifacts/xlp-$(VERSION)-linux-arm64.tar.gz xlp
-	rm artifacts/xlp
+amd64 arm64:
+	GOARCH=$@ $(GBuild) -o artifacts/xlp-$@ ./cmd/xlp
+	tar -C artifacts --transform='s/^xlp-$@$$/xlp/' -czvf artifacts/xlp-$(VERSION)-linux-$@.tar.gz xlp-$@
 
 build:: amd64 arm64
 
-busybox:: amd64
-	$(DBuild) --load -t $(NAME):$(VERSION) .
+busybox:: $(TARGETARCH)
+	$(DBuild) --load --platform linux/$(TARGETARCH) -t $(NAME):$(VERSION) .
 
-ubuntu:: amd64
-	$(DBuild) --load -t $(NAME):$(VERSION)-ubuntu -f ubuntu.Dockerfile .
+ubuntu:: $(TARGETARCH)
+	$(DBuild) --load --platform linux/$(TARGETARCH) -t $(NAME):$(VERSION)-ubuntu -f ubuntu.Dockerfile .
 
-debian:: amd64
-	$(DBuild) --load -t $(NAME):$(VERSION)-debian -f debian.Dockerfile .
+debian:: $(TARGETARCH)
+	$(DBuild) --load --platform linux/$(TARGETARCH) -t $(NAME):$(VERSION)-debian -f debian.Dockerfile .
