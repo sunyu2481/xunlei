@@ -2,10 +2,11 @@
 
 const $ = (id) => document.getElementById(id);
 let status = {}, tasks = [], filter = 'all', nextPage = '', refreshing = false;
-let creating = false, folderCurrent = '', folderHistory = [], folderCallback = null;
+let creating = false, folderCurrent = '', folderHistory = [], folderSession = null;
 let generation = 0, pagesLoaded = 0, submissions = {};
 let loginGeneration = 0, verificationUsername = '', smsTimer = null, noticeTimer = null, refreshQueued = false;
 let visibleInPanel = window.parent === window;
+const queries = new Map();
 try { submissions = JSON.parse(sessionStorage.getItem('xlp-remote-submissions') || '{}'); } catch { /* 浏览器不支持存储时使用当前页面内存。 */ }
 if (!submissions || typeof submissions !== 'object' || Array.isArray(submissions)) submissions = {};
 
@@ -21,12 +22,13 @@ function notice(message, success = false) {
   $('notice').hidden = !message;
   if (message && success) noticeTimer = setTimeout(() => notice(''), 5000);
 }
-async function api(path, method = 'GET', body) {
+async function api(path, method = 'GET', body, signal) {
   const headers = {};
   if (method !== 'GET') { headers['Content-Type'] = 'application/json'; headers['X-XLP-Request'] = '1'; }
   let response;
   try {
-    response = await fetch('/api/remote' + path, { method, headers, body: body === undefined ? undefined : JSON.stringify(body), signal: AbortSignal.timeout(100000) });
+    const timeout = AbortSignal.timeout(100000);
+    response = await fetch('/api/remote' + path, { method, headers, body: body === undefined ? undefined : JSON.stringify(body), signal: signal ? AbortSignal.any([signal, timeout]) : timeout });
   } catch {
     const error = new Error('网络连接中断或请求超时，请稍后检查结果'); error.code = 'network'; throw error;
   }
@@ -37,6 +39,27 @@ async function api(path, method = 'GET', body) {
     error.code = data.code || 'network'; throw error;
   }
   return data;
+}
+function cancelQuery(kind) {
+  queries.get(kind)?.controller.abort();
+  queries.delete(kind);
+}
+function beginQuery(kind) {
+  cancelQuery(kind);
+  const query = { generation, controller: new AbortController() };
+  queries.set(kind, query); return query;
+}
+function currentQuery(kind, query) {
+  return !!query && queries.get(kind) === query && query.generation === generation;
+}
+function tasksVisible() { return visibleInPanel && !document.hidden; }
+function cancelTaskRefresh() {
+  cancelQuery('tasks'); refreshing = false; refreshQueued = false;
+  $('refresh-button').disabled = false; $('load-more').disabled = false;
+}
+function resetFolders() {
+  cancelQuery('folders'); folderSession = null; folderCurrent = ''; folderHistory = [];
+  $('folder-select').disabled = true; $('folder-back').disabled = true;
 }
 function icon(name) {
   const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
@@ -54,10 +77,17 @@ document.querySelectorAll('[data-close]').forEach((button) => button.addEventLis
 $('create-dialog').addEventListener('cancel', (event) => { if (creating) event.preventDefault(); });
 
 async function loadStatus() {
+  const query = beginQuery('status');
+  let data;
+  try { data = await api('/status', 'GET', undefined, query.controller.signal); }
+  catch (error) { if (!currentQuery('status', query)) return false; throw error; }
+  if (!currentQuery('status', query)) return false;
   const previous = status;
-  status = await api('/status');
+  status = data;
   if (previous.target !== status.target || previous.username !== status.username || previous.logged_in !== status.logged_in) {
     generation++; tasks = []; nextPage = ''; pagesLoaded = 0;
+    cancelTaskRefresh(); resetFolders(); $('folder-dialog').close();
+    cancelQuery('devices'); $('device-dialog').close();
   }
   if (previous.username && previous.username !== status.username) { submissions = {}; rememberSubmissions(); }
   $('account-name').textContent = status.logged_in ? status.username : '未登录迅雷账号';
@@ -67,6 +97,7 @@ async function loadStatus() {
   $('status-text').textContent = status.logged_in ? (status.target ? '已连接账号 · ' + status.target_name : '已登录，请选择下载设备') : '未登录迅雷账号';
   renderLoginReview();
   renderTasks();
+  return true;
 }
 function renderLoginReview() {
   const current = $('login-dialog').open && verificationUsername && verificationUsername === $('username').value.trim() && verificationUsername === status.username;
@@ -93,9 +124,12 @@ function openLogin() {
 }
 $('login-dialog').addEventListener('close', () => { resetLoginReview(); $('password').value = ''; });
 ['username', 'password'].forEach((id) => $(id).addEventListener('input', () => { resetLoginReview(); $('login-message').textContent = ''; }));
-async function sessionError(error) {
-  if (!['login_required', 'captcha_required', 'review_required', 'verification_required'].includes(error.code)) return;
-  try { await loadStatus(); } catch { /* 网络不可用时仍允许重新输入账号。 */ }
+async function sessionError(error, valid) {
+  if (!valid() || !['login_required', 'captcha_required', 'review_required', 'verification_required'].includes(error.code)) return;
+  const username = status.username;
+  try { if (!await loadStatus()) return; } catch { return; }
+  // 只有最新状态确认当前账号确实需要登录，才打断现有弹窗。
+  if (status.logged_in || status.username !== username || !tasksVisible()) return;
   document.querySelectorAll('dialog[open]').forEach((dialog) => dialog.close());
   openLogin(); $('login-message').textContent = error.message;
 }
@@ -158,18 +192,21 @@ $('review-form').addEventListener('submit', async (event) => {
 
 async function openDevices() {
   if (!status.logged_in) { openLogin(); return; }
+  const query = beginQuery('devices'), valid = () => currentQuery('devices', query) && $('device-dialog').open;
   showDialog('device-dialog'); $('device-save').disabled = true; $('reload-devices').disabled = true;
   $('device-select').replaceChildren(); $('device-message').textContent = '正在读取账号绑定的设备…';
   try {
-    const devices = await api('/devices');
+    const devices = await api('/devices', 'GET', undefined, query.controller.signal);
+    if (!valid()) return;
     $('device-select').append(new Option('请选择下载设备', ''));
     devices.forEach((device) => $('device-select').append(new Option(device.name, device.target)));
     $('device-select').value = status.target || '';
     $('device-save').disabled = !devices.length;
     $('device-message').textContent = devices.length ? '' : '账号下暂未发现远程下载设备';
-  } catch (error) { $('device-message').textContent = error.message; await sessionError(error); }
-  finally { $('reload-devices').disabled = false; }
+  } catch (error) { if (valid()) { $('device-message').textContent = error.message; await sessionError(error, valid); } }
+  finally { if (valid()) $('reload-devices').disabled = false; }
 }
+$('device-dialog').addEventListener('close', () => { if (!$('device-dialog').open) cancelQuery('devices'); });
 ['device-summary', 'reload-devices'].forEach((id) => $(id).addEventListener('click', openDevices));
 $('device-form').addEventListener('submit', async (event) => {
   event.preventDefault(); $('device-save').disabled = true;
@@ -182,10 +219,14 @@ $('device-form').addEventListener('submit', async (event) => {
 });
 
 async function browseFolder(directory, remember = true) {
+  const session = folderSession;
+  if (!session || session.generation !== generation || !$('folder-dialog').open) return;
+  const query = beginQuery('folders'), valid = () => currentQuery('folders', query) && folderSession === session && $('folder-dialog').open;
   $('folder-select').disabled = true; $('folder-back').disabled = true;
   $('folders').replaceChildren(element('p', 'muted', '正在读取设备目录…')); $('folder-message').textContent = '';
   try {
-    const folders = await api('/folders?target=' + encodeURIComponent(status.target) + '&path=' + encodeURIComponent(directory));
+    const folders = await api('/folders?target=' + encodeURIComponent(session.target) + '&path=' + encodeURIComponent(directory), 'GET', undefined, query.controller.signal);
+    if (!valid()) return;
     if (remember && directory !== folderCurrent) folderHistory.push(folderCurrent);
     folderCurrent = directory; $('folder-path').textContent = directory || '设备目录';
     $('folders').replaceChildren();
@@ -197,26 +238,30 @@ async function browseFolder(directory, remember = true) {
     });
     $('folder-select').disabled = !directory;
   } catch (error) {
+    if (!valid()) return;
     $('folders').replaceChildren(); $('folder-message').textContent = error.message;
-  } finally { $('folder-back').disabled = !folderHistory.length; }
+  } finally { if (valid()) $('folder-back').disabled = !folderHistory.length; }
 }
 async function openFolders(directory, callback) {
   if (!status.logged_in) { openLogin(); return; }
   if (!status.target) { await openDevices(); return; }
-  folderCallback = callback; folderHistory = []; folderCurrent = '';
+  resetFolders(); folderSession = { callback, target: status.target, generation };
   showDialog('folder-dialog'); await browseFolder(directory || '', false);
 }
 $('folder-root').addEventListener('click', () => browseFolder(''));
 $('folder-back').addEventListener('click', () => browseFolder(folderHistory.pop() || '', false));
+$('folder-dialog').addEventListener('close', () => { if (!$('folder-dialog').open) resetFolders(); });
 $('folder-select').addEventListener('click', async () => {
-  if (!folderCurrent) return;
+  const session = folderSession, query = queries.get('folders');
+  const valid = () => !!session && folderSession === session && currentQuery('folders', query) && $('folder-dialog').open;
+  if (!valid() || !folderCurrent || $('folder-select').disabled) return;
   $('folder-select').disabled = true;
-  try { await folderCallback(folderCurrent); $('folder-dialog').close(); }
-  catch (error) { $('folder-message').textContent = error.message; }
-  finally { $('folder-select').disabled = false; }
+  try { await session.callback(folderCurrent, session.target); if (valid()) $('folder-dialog').close(); }
+  catch (error) { if (valid()) $('folder-message').textContent = error.message; }
+  finally { if (valid()) $('folder-select').disabled = false; }
 });
-$('directory-button').addEventListener('click', () => openFolders(status.directory, async (directory) => {
-  await api('/settings', 'PUT', { target: status.target, directory }); await loadStatus(); notice('默认下载目录已保存', true);
+$('directory-button').addEventListener('click', () => openFolders(status.directory, async (directory, target) => {
+  await api('/settings', 'PUT', { target, directory }); await loadStatus(); notice('默认下载目录已保存', true);
 }));
 $('create-browse').addEventListener('click', () => openFolders($('create-directory').value, (directory) => { $('create-directory').value = directory; }));
 
@@ -266,17 +311,19 @@ function renderTasks() {
   });
 }
 async function refreshTasks(append = false) {
-  if (!status.logged_in || !status.target) return;
+  if (!tasksVisible() || !status.logged_in || !status.target) return;
   if (refreshing) { refreshQueued = true; return; }
+  const query = beginQuery('tasks'), valid = () => currentQuery('tasks', query) && tasksVisible();
   refreshing = true; $('refresh-button').disabled = true; $('load-more').disabled = true;
-  const token = generation, target = status.target, limit = append ? 1 : Math.max(1, pagesLoaded);
+  const target = status.target, limit = append ? 1 : Math.max(1, pagesLoaded);
   try {
     const combined = append ? [...tasks] : [], seen = new Set();
     let pageToken = append ? nextPage : '', loaded = 0;
     do {
+      if (!valid()) return;
       seen.add(pageToken);
-      const data = await api('/tasks?target=' + encodeURIComponent(target) + '&page_token=' + encodeURIComponent(pageToken));
-      if (token !== generation) return;
+      const data = await api('/tasks?target=' + encodeURIComponent(target) + '&page_token=' + encodeURIComponent(pageToken), 'GET', undefined, query.controller.signal);
+      if (!valid()) return;
       combined.push(...data.tasks); loaded++;
       pageToken = data.next_page_token || '';
       if (seen.has(pageToken)) pageToken = '';
@@ -285,10 +332,16 @@ async function refreshTasks(append = false) {
     pagesLoaded = append ? pagesLoaded + loaded : loaded; renderTasks();
     if ($('notice').classList.contains('success')) notice('');
     $('status-text').textContent = '已更新 · ' + new Date().toLocaleTimeString('zh-CN');
-  } catch (error) { notice(error.message); $('status-text').textContent = '刷新失败，可稍后重试'; await sessionError(error); }
+  } catch (error) {
+    if (!valid()) return;
+    notice(error.message); $('status-text').textContent = '刷新失败，可稍后重试'; await sessionError(error, valid);
+  }
   finally {
-    refreshing = false; $('refresh-button').disabled = false; $('load-more').disabled = false;
-    if (refreshQueued) { refreshQueued = false; await refreshTasks(); }
+    if (currentQuery('tasks', query)) {
+      const queued = refreshQueued;
+      cancelTaskRefresh();
+      if (queued && tasksVisible()) await refreshTasks();
+    }
   }
 }
 async function taskAction(task, action, button) {
@@ -300,9 +353,10 @@ async function taskAction(task, action, button) {
   } catch (error) { notice(error.message); }
   finally { button.disabled = false; }
 }
-$('refresh-button').addEventListener('click', async () => {
-  try { await loadStatus(); await refreshTasks(); } catch (error) { notice(error.message); }
-});
+async function refreshView() {
+  try { if (await loadStatus()) await refreshTasks(); } catch (error) { notice(error.message); }
+}
+$('refresh-button').addEventListener('click', refreshView);
 $('load-more').addEventListener('click', () => refreshTasks(true));
 document.querySelectorAll('[data-filter]').forEach((button) => button.addEventListener('click', () => {
   filter = button.dataset.filter;
@@ -326,9 +380,15 @@ window.addEventListener('message', (event) => {
   if (event.source !== window.parent || event.origin !== location.origin || event.data?.type !== 'xlp:remote-visibility') return;
   const previous = visibleInPanel;
   visibleInPanel = event.data.visible === true;
-  if (!visibleInPanel && $('notice').classList.contains('success')) notice('');
-  if (visibleInPanel && !previous) refreshTasks();
+  if (previous !== visibleInPanel) updateTaskVisibility();
 });
+function updateTaskVisibility() {
+  if (!tasksVisible()) {
+    cancelTaskRefresh(); cancelQuery('status');
+    if ($('notice').classList.contains('success')) notice('');
+  } else refreshView();
+}
+document.addEventListener('visibilitychange', updateTaskVisibility);
 
 function requestID() {
   const bytes = new Uint8Array(16); crypto.getRandomValues(bytes);
@@ -368,11 +428,10 @@ $('create-dialog').addEventListener('close', () => {
 
 (async () => {
   try {
-    await loadStatus();
-    if (visibleInPanel) await refreshTasks();
+    if (await loadStatus()) await refreshTasks();
     if (window.parent !== window) window.parent.postMessage({ type: 'xlp:remote-ready' }, location.origin);
   } catch (error) { notice(error.message); $('status-text').textContent = '连接失败，请刷新页面'; }
 })();
 setInterval(() => {
-  if (visibleInPanel && !document.hidden && !document.querySelector('dialog[open]')) refreshTasks();
+  if (tasksVisible() && !document.querySelector('dialog[open]')) refreshTasks();
 }, 15000);
