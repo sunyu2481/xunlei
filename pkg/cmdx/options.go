@@ -5,6 +5,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"reflect"
 	"slices"
 	"strings"
 	"syscall"
@@ -127,32 +128,28 @@ type iOption interface {
 	~func(*Cmd) | ~func(*Cmd) error | ~func(*Cmd) Closer | ~func(*Cmd) (Closer, error)
 }
 
-func May[O iOption](option O) func(*Cmd) (fc Closer, err error) {
-	return func(c *Cmd) (fc Closer, err error) {
-		fc = func() {}
-
-		if optApply, ok := any(option).(func(*Cmd) (Closer, error)); ok {
-			fc, err = optApply(c)
-			return
+// May 将约束内的命名或匿名函数适配为选项，保留其错误与清理函数。
+func May[O iOption](option O) Option {
+	// 仅在构造时转换函数类型，执行选项时直接调用已适配的函数。
+	value := reflect.ValueOf(option)
+	switch {
+	case value.CanConvert(reflect.TypeFor[func(*Cmd) (Closer, error)]()):
+		apply := value.Convert(reflect.TypeFor[func(*Cmd) (Closer, error)]()).Interface().(func(*Cmd) (Closer, error))
+		return func(c *Cmd) (Closer, error) { return apply(c) }
+	case value.CanConvert(reflect.TypeFor[func(*Cmd) Closer]()):
+		apply := value.Convert(reflect.TypeFor[func(*Cmd) Closer]()).Interface().(func(*Cmd) Closer)
+		return func(c *Cmd) (Closer, error) { return apply(c), nil }
+	case value.CanConvert(reflect.TypeFor[func(*Cmd) error]()):
+		apply := value.Convert(reflect.TypeFor[func(*Cmd) error]()).Interface().(func(*Cmd) error)
+		return func(c *Cmd) (Closer, error) { return func() {}, apply(c) }
+	case value.CanConvert(reflect.TypeFor[func(*Cmd)]()):
+		apply := value.Convert(reflect.TypeFor[func(*Cmd)]()).Interface().(func(*Cmd))
+		return func(c *Cmd) (Closer, error) {
+			apply(c)
+			return func() {}, nil
 		}
-
-		if optApply, ok := any(option).(func(*Cmd) Closer); ok {
-			fc = optApply(c)
-			return
-		}
-
-		if optApply, ok := any(option).(func(*Cmd) error); ok {
-			err = optApply(c)
-			return
-		}
-
-		if optApply, ok := any(option).(func(*Cmd)); ok {
-			optApply(c)
-			return
-		}
-
-		err = fmt.Errorf("[%T]%v: apply error", option, option)
-		return
+	default:
+		panic("命令选项函数类型不满足已声明的约束")
 	}
 }
 

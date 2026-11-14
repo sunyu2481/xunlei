@@ -1,6 +1,7 @@
 package utils
 
 import (
+	"reflect"
 	"sync"
 	"time"
 )
@@ -54,29 +55,27 @@ func Sleep(d time.Duration, cBreaks ...<-chan struct{}) (breaked bool) {
 }
 
 // After 异步等待 done 可读或关闭时调用 f；若先收到中断则结束等待，不调用 f。
+// 支持约束内的命名或匿名函数；忽略 f 返回的错误。
 func After[T any, F ft[T]](done <-chan T, f F, cBreaks ...<-chan struct{}) {
-	go SelectDo(done, func(t T, ok bool) {
-		af := any(f)
-		if ft, ok := af.(func()); ok {
-			ft()
-			return
-		}
-
-		if ft, ok := af.(func() error); ok {
-			_ = ft()
-			return
-		}
-
-		if ft, ok := af.(func(T)); ok {
-			ft(t)
-			return
-		}
-
-		if ft, ok := af.(func(T) error); ok {
-			_ = ft(t)
-			return
-		}
-	}, cBreaks...)
+	value := reflect.ValueOf(f)
+	var callback func(T, bool)
+	switch {
+	case value.CanConvert(reflect.TypeFor[func()]()):
+		apply := value.Convert(reflect.TypeFor[func()]()).Interface().(func())
+		callback = func(T, bool) { apply() }
+	case value.CanConvert(reflect.TypeFor[func() error]()):
+		apply := value.Convert(reflect.TypeFor[func() error]()).Interface().(func() error)
+		callback = func(T, bool) { _ = apply() }
+	case value.CanConvert(reflect.TypeFor[func(T)]()):
+		apply := value.Convert(reflect.TypeFor[func(T)]()).Interface().(func(T))
+		callback = func(t T, _ bool) { apply(t) }
+	case value.CanConvert(reflect.TypeFor[func(T) error]()):
+		apply := value.Convert(reflect.TypeFor[func(T) error]()).Interface().(func(T) error)
+		callback = func(t T, _ bool) { _ = apply(t) }
+	default:
+		panic("异步回调函数类型不满足已声明的约束")
+	}
+	go SelectDo(done, callback, cBreaks...)
 }
 
 type ft[T any] interface {
