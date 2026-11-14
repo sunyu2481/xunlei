@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -60,7 +61,7 @@ type Options struct {
 	// Enable source code location (Default: false)
 	AddSource bool
 
-	// Minimum level to log (Default: slog.LevelInfo)
+	// 最低日志等级，默认使用 slog.LevelInfo；动态 Leveler 必须支持并发读取。
 	Level slog.Leveler
 
 	// ReplaceAttr is called to rewrite each non-group attribute before it is logged.
@@ -78,8 +79,9 @@ type Options struct {
 // using the default options. If opts is nil, the default options are used.
 func NewHandler(w io.Writer, opts *Options) slog.Handler {
 	h := &handler{
+		mu:         &sync.Mutex{},
 		w:          w,
-		level:      defaultLevel,
+		level:      &levelState{value: defaultLevel},
 		timeFormat: defaultTimeFormat,
 	}
 	if opts == nil {
@@ -88,7 +90,7 @@ func NewHandler(w io.Writer, opts *Options) slog.Handler {
 
 	h.addSource = opts.AddSource
 	if opts.Level != nil {
-		h.level = opts.Level
+		h.level.value = opts.Level
 	}
 	h.replaceAttr = opts.ReplaceAttr
 	if opts.TimeFormat != "" {
@@ -108,11 +110,11 @@ type handler struct {
 	groupPrefix string
 	groups      []string
 
-	mu sync.Mutex
+	mu *sync.Mutex
 	w  io.Writer
 
 	addSource   bool
-	level       slog.Leveler
+	level       *levelState
 	replaceAttr func([]string, slog.Attr) slog.Attr
 	timeFormat  string
 	noColor     bool
@@ -122,7 +124,8 @@ func (h *handler) clone() *handler {
 	return &handler{
 		attrsPrefix: h.attrsPrefix,
 		groupPrefix: h.groupPrefix,
-		groups:      h.groups,
+		groups:      slices.Clone(h.groups),
+		mu:          h.mu,
 		w:           h.w,
 		addSource:   h.addSource,
 		level:       h.level,
@@ -390,7 +393,8 @@ func (h *handler) appendAttr(buf *buffer, attr slog.Attr, groupsPrefix string, g
 	if attr.Value.Kind() == slog.KindGroup {
 		if attr.Key != "" {
 			groupsPrefix += attr.Key + "."
-			groups = append(groups, attr.Key)
+			// 递归追加不能改写当前处理器或其他日志记录共享的分组容量。
+			groups = append(groups[:len(groups):len(groups)], attr.Key)
 		}
 		for _, groupAttr := range attr.Value.Group() {
 			h.appendAttr(buf, groupAttr, groupsPrefix, groups)

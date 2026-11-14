@@ -4,16 +4,32 @@ import (
 	"cmp"
 	"log/slog"
 	"strings"
+	"sync"
 )
 
-// Level sets the log level
+// levelState 由同源处理器共享，同时保留外部动态等级的读取能力。
+type levelState struct {
+	mu    sync.RWMutex
+	value slog.Leveler
+}
+
+func (s *levelState) Level() slog.Level {
+	s.mu.RLock()
+	value := s.value
+	s.mu.RUnlock()
+	return value.Level()
+}
+
+func (s *levelState) set(level string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.value = LevelFromString(level, s.value.Level())
+}
+
+// Level 设置记录器及其全部同源派生记录器的共享等级，替代原有等级来源。
 func Level(logger *slog.Logger, level string) {
 	if h, ok := logger.Handler().(*handler); ok {
-		var def slog.Level = slog.LevelInfo
-		if h.level != nil {
-			def = h.level.Level()
-		}
-		h.level = LevelFromString(level, def)
+		h.level.set(level)
 	}
 }
 
