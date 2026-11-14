@@ -1,6 +1,8 @@
 package fo
 
 import (
+	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"testing"
@@ -188,18 +190,45 @@ func Test匹配文件保留零权限(t *testing.T) {
 	}
 }
 
-func TestXxx(t *testing.T) {
-	wRepl := func(flag int, wFlag int) int {
-		return flag&^(os.O_APPEND|os.O_TRUNC|os.O_EXCL) | wFlag
+func Test文件处理结束关闭句柄(t *testing.T) {
+	for _, mode := range []string{"读取", "写入"} {
+		for _, failed := range []bool{false, true} {
+			t.Run(mode+map[bool]string{false: "成功", true: "失败"}[failed], func(t *testing.T) {
+				name := filepath.Join(t.TempDir(), "文件")
+				if err := os.WriteFile(name, []byte("原内容"), 0600); err != nil {
+					t.Fatal(err)
+				}
+				var want error
+				if failed {
+					want = errors.New("模拟文件处理失败")
+				}
+				open, content := OpenRead, "原内容"
+				if mode == "写入" {
+					open, content = OpenWrite, "新内容"
+				}
+				var opened *os.File
+				err := open(name, func(file *os.File) error {
+					opened = file
+					t.Cleanup(func() { file.Close() })
+					if mode == "读取" {
+						if data, err := io.ReadAll(file); err != nil || string(data) != content {
+							t.Fatalf("读取内容=%q，错误=%v", data, err)
+						}
+					} else if _, err := file.WriteString(content); err != nil {
+						t.Fatal(err)
+					}
+					return want
+				})
+				if !errors.Is(err, want) || opened == nil {
+					t.Fatalf("文件回调未执行或结果丢失：%v", err)
+				}
+				if _, err := opened.Stat(); !errors.Is(err, os.ErrClosed) {
+					t.Fatalf("处理结束未关闭文件：%v", err)
+				}
+				if data, err := os.ReadFile(name); err != nil || string(data) != content {
+					t.Fatalf("文件内容=%q，期望=%q，错误=%v", data, content, err)
+				}
+			})
+		}
 	}
-
-	const (
-		TRUNC  = os.O_CREATE | os.O_WRONLY | os.O_TRUNC
-		APPEND = os.O_CREATE | os.O_WRONLY | os.O_APPEND
-		EXCL   = os.O_CREATE | os.O_WRONLY | os.O_EXCL
-	)
-
-	t.Log(wRepl(TRUNC, os.O_APPEND), APPEND)
-	t.Log(wRepl(APPEND, os.O_EXCL), EXCL)
-	t.Log(wRepl(EXCL, os.O_TRUNC), TRUNC)
 }

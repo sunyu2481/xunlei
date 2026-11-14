@@ -1,13 +1,6 @@
 package xunlei
 
-import (
-	"log/slog"
-	"os"
-	"testing"
-
-	"github.com/cnk3x/xunlei/pkg/flags"
-	"github.com/spf13/pflag"
-)
+import "testing"
 
 func TestConfigUploadLimit(t *testing.T) {
 	for _, tc := range []struct {
@@ -27,14 +20,7 @@ func TestConfigUploadLimit(t *testing.T) {
 		{name: "负数命令行", args: []string{"--upload_limit", "-1"}, wantErr: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			oldFlags, oldArgs, oldLogger := flags.CommandLine, os.Args, slog.Default()
-			t.Cleanup(func() {
-				flags.CommandLine, os.Args = oldFlags, oldArgs
-				slog.SetDefault(oldLogger)
-			})
-			flags.CommandLine = pflag.NewFlagSet("上传限速测试", pflag.ContinueOnError)
-			os.Args = append([]string{"xlp"}, tc.args...)
-			t.Setenv("XL_ROOT", t.TempDir())
+			setupConfigTest(t, tc.args...)
 			t.Setenv("XL_UPLOAD_LIMIT", tc.env)
 			t.Setenv("XL_UPLOAD_INTERFACE", "eth1")
 			var cfg Config
@@ -50,16 +36,7 @@ func TestConfigUploadLimit(t *testing.T) {
 }
 
 func TestConfigWithoutAdditionalPanelCredentials(t *testing.T) {
-	oldFlags, oldArgs, oldLogger := flags.CommandLine, os.Args, slog.Default()
-	t.Cleanup(func() { flags.CommandLine, os.Args = oldFlags, oldArgs; slog.SetDefault(oldLogger) })
-	flags.CommandLine = pflag.NewFlagSet("面板配置测试", pflag.ContinueOnError)
-	os.Args = []string{"xlp"}
-	t.Setenv("XL_ROOT", t.TempDir())
-	t.Setenv("XL_DASHBOARD_USERNAME", "")
-	t.Setenv("XL_DASHBOARD_PASSWORD", "")
-	t.Setenv("XL_BA_USER", "")
-	t.Setenv("XL_BA_PASSWORD", "")
-	t.Setenv("XL_UPLOAD_LIMIT", "")
+	setupConfigTest(t)
 	var cfg Config
 	if err := ConfigBind(&cfg); err != nil {
 		t.Fatalf("不应要求额外设置面板账号：%v", err)

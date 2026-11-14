@@ -8,8 +8,6 @@ bin/
 /rootfs/
 home.repo
 
-testdata/
-test_data/
 /amd64/
 artifacts/
 /lib

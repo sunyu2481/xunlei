@@ -13,7 +13,6 @@ import (
 	"strings"
 	"syscall"
 	"testing"
-	"time"
 
 	"github.com/cnk3x/xunlei/spk"
 	"github.com/ulikunitz/xz"
@@ -109,10 +108,4 @@ func TestMockEnvInternalListeners(t *testing.T) {
 			t.Errorf("子进程的 %s 地址应为 %q，实际为 %q", key, want, got)
 		}
 	}
-}
-
-func TestXxx(t *testing.T) {
-	dt, _ := time.Parse("15:04:05.00", "05:52:48.18")
-
-	t.Log(dt.Format(time.RFC3339Nano))
 }

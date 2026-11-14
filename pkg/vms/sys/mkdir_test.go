@@ -1,55 +1,44 @@
 package sys
 
 import (
+	"context"
 	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
-
-	"github.com/cnk3x/xunlei/pkg/vms/sys/errs"
 )
 
-func TestMkdir(t *testing.T) {
-	var err error
-	os.MkdirAll("test_data/EEXIST", 0777)
-
-	err = os.Mkdir("test_data/EEXIST", 0777) //存在 EEXIST
-	printErr(t, err)
-	err = os.Mkdir("test_data/FEXIST", 0777) //路径存在, 且非文件夹, EEXIST
-	printErr(t, err)
-	err = os.Mkdir("test_data/ENOENT/1", 0777) //上级路径不存在 ENOENT
-	printErr(t, err)
-	err = os.Mkdir("test_data/FEXIST/1", 0777) //上级路径存在, 且非文件夹, ENOTDIR
-	printErr(t, err)
-	err = os.Mkdir("test_data/n1", 0777) //路径存在, 为软链接，软链接目标丢失 EEXIST
-	printErr(t, err)
-	err = os.Mkdir("test_data/n2", 0777) //路径存在, 为软链接，软链接目标存在 EEXIST
-	printErr(t, err)
-	err = os.Mkdir("test_data/n3", 0777) //路径存在, 为软链接，软链接目标存在,且非文件夹 EEXIST
-	printErr(t, err)
-
-	l1, _ := os.Readlink("test_data/n1")
-	l2, _ := os.Readlink("test_data/n2")
-	l3, _ := os.Readlink("test_data/n3")
-	l4, _ := os.Readlink("test_data/n4")
-
-	t1, _ := filepath.EvalSymlinks("test_data/n1")
-	t2, _ := filepath.EvalSymlinks("test_data/n2")
-	t3, _ := filepath.EvalSymlinks("test_data/n3")
-	t4, _ := filepath.EvalSymlinks("test_data/n4")
-
-	t.Logf("l: n1: %s, n2: %s, n3: %s, n4: %s", l1, l2, l3, l4)
-	t.Logf("t: n1: %s, n2: %s, n3: %s, n4: %s", t1, t2, t3, t4)
-}
-
-// switch {
-// case errors.Is(err, syscall.ENOENT): //上级路径不存在
-// case errors.Is(err, syscall.ENOTDIR): //上级路径存在, 且非文件夹
-// case errors.Is(err, syscall.EEXIST): //路径存在, 可能是文件夹，可能是文件
-// }
-func printErr(t *testing.T, err error) {
-	if name, code, ok := errs.ErrCode(err); ok {
-		t.Logf("[%T(%s(%s))]%v", err, name, code, err)
-	} else {
-		t.Logf("[%T]%v", err, err)
+func Test创建目录回滚后可重复执行(t *testing.T) {
+	base := t.TempDir()
+	marker := filepath.Join(base, "原文件")
+	if err := os.WriteFile(marker, []byte("保留内容"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(base, "新增", "末级")
+	for i := range 3 {
+		t.Run("第"+strconv.Itoa(i+1)+"次", func(t *testing.T) {
+			undo, err := Mkdir(context.Background(), dir, 0700)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(undo)
+			if info, err := os.Stat(dir); err != nil || !info.IsDir() {
+				t.Fatalf("未创建末级目录：%v", err)
+			}
+			keep, err := Mkdir(context.Background(), dir, 0700)
+			if err != nil {
+				t.Fatal(err)
+			}
+			keep()
+			if info, err := os.Stat(dir); err != nil || !info.IsDir() {
+				t.Fatalf("重复创建的回滚删除了已有目录：%v", err)
+			}
+		})
+		if _, err := os.Stat(filepath.Join(base, "新增")); !os.IsNotExist(err) {
+			t.Fatalf("新增目录未完全回滚：%v", err)
+		}
+		if data, err := os.ReadFile(marker); err != nil || string(data) != "保留内容" {
+			t.Fatalf("回滚改变了原文件：%q，错误=%v", data, err)
+		}
 	}
 }
