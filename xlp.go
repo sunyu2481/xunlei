@@ -87,8 +87,12 @@ func Before(cfg Config) func(ctx context.Context) (func(), error) {
 		}
 
 		if cfg.Uid != 0 || cfg.Gid != 0 {
-			sys.Chown(ctx, utils.Array(varPath), cfg.Uid, cfg.Gid, false)
-			sys.Chown(ctx, utils.Array(cfg.DirData, target), cfg.Uid, cfg.Gid, true)
+			if err = sys.Chown(ctx, utils.Array(varPath), cfg.Uid, cfg.Gid, false); err != nil {
+				return
+			}
+			if err = sys.Chown(ctx, utils.Array(cfg.DirData, target), cfg.Uid, cfg.Gid, true); err != nil {
+				return
+			}
 		}
 
 		return
