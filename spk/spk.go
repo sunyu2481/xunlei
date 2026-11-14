@@ -12,8 +12,6 @@ import (
 	"regexp"
 	"runtime"
 	"strings"
-
-	"github.com/ulikunitz/xz"
 )
 
 const versionFile = "bin/bin/version"
@@ -24,6 +22,11 @@ var versionPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
 
 // Extract 在受限临时目录验证归档，只安装当前架构及版本需要的普通文件。
 func Extract(ctx context.Context, src io.Reader, dstDir string) error {
+	return extractLimited(ctx, src, dstDir, defaultLimits())
+}
+
+func extractLimited(ctx context.Context, src io.Reader, dstDir string, limits resourceLimits) error {
+	src = limitReader(src, limits.source, "套件来源")
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -39,7 +42,7 @@ func Extract(ctx context.Context, src io.Reader, dstDir string) error {
 	defer cleanup()
 	files := make(map[string]string)
 	found := false
-	err = Walk(ctx, src, func(tr io.Reader, h *tar.Header) error {
+	err = walkLimited(ctx, src, func(tr io.Reader, h *tar.Header) error {
 		name, err := archivePath(h.Name)
 		if err != nil {
 			return err
@@ -51,7 +54,7 @@ func Extract(ctx context.Context, src io.Reader, dstDir string) error {
 			return fmt.Errorf("内层套件重复或不是普通文件")
 		}
 		found = true
-		return Walk(ctx, tr, func(tr io.Reader, h *tar.Header) error {
+		return walkLimited(ctx, tr, func(tr io.Reader, h *tar.Header) error {
 			name, err := archivePath(h.Name)
 			if err != nil {
 				return err
@@ -79,8 +82,8 @@ func Extract(ctx context.Context, src io.Reader, dstDir string) error {
 				err = closeErr
 			}
 			return err
-		}, Xz)
-	})
+		}, limits, func(r io.Reader) (io.ReadCloser, error) { return xzLimited(r, limits) })
+	}, limits)
 	if err != nil {
 		return err
 	}
@@ -147,7 +150,11 @@ func packageFile(name string) bool {
 
 // 以下为归档遍历和解码接口。
 
-func Walk(ctx context.Context, src io.Reader, walk WalkFunc, decoder ...Decoder) (err error) {
+func Walk(ctx context.Context, src io.Reader, walk WalkFunc, decoder ...Decoder) error {
+	return walkLimited(ctx, src, walk, defaultLimits(), decoder...)
+}
+
+func walkLimited(ctx context.Context, src io.Reader, walk WalkFunc, limits resourceLimits, decoder ...Decoder) (err error) {
 	if err = ctx.Err(); err != nil {
 		return err
 	}
@@ -162,18 +169,24 @@ func Walk(ctx context.Context, src io.Reader, walk WalkFunc, decoder ...Decoder)
 		}
 	}
 
-	for tr := tar.NewReader(contextReader{ctx, dr}); ; {
+	decoded := limitReader(contextReader{ctx, dr}, limits.expanded, "解压总字节数")
+	entries := 0
+	for tr := tar.NewReader(decoded); ; {
 		if err = ctx.Err(); err != nil {
 			return err
 		}
 		hdr, e := tr.Next()
 		if e == io.EOF {
 			// tar 的结束块不代表压缩流结束，必须继续读取以验证校验和、索引和尾部。
-			_, err = io.Copy(io.Discard, contextReader{ctx, dr})
+			_, err = io.Copy(io.Discard, decoded)
 			return err
 		}
 		if e != nil {
 			return e
+		}
+		entries++
+		if entries > limits.entries || hdr.Size > limits.file {
+			return fmt.Errorf("%w：归档条目数量或单文件大小", errResourceLimit)
 		}
 		if err = walk(tr, hdr); err != nil {
 			return err
@@ -198,8 +211,7 @@ func (r contextReader) Read(p []byte) (int, error) {
 }
 
 func Xz(src io.Reader) (io.ReadCloser, error) {
-	xzr, err := xz.NewReader(src)
-	return io.NopCloser(xzr), err
+	return xzLimited(src, defaultLimits())
 }
 
 type Decoder func(io.Reader) (io.ReadCloser, error)

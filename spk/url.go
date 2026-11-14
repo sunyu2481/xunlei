@@ -2,6 +2,7 @@ package spk
 
 import (
 	"bytes"
+	"compress/gzip"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -57,6 +58,9 @@ func Download(ctx context.Context, spkUrl string, dir string, force bool) error 
 		if !info.Mode().IsRegular() {
 			return fmt.Errorf("本地套件必须是普通文件")
 		}
+		if info.Size() > defaultLimits().source {
+			return fmt.Errorf("%w：本地套件大小", errResourceLimit)
+		}
 		return extractSource(ctx, f, dir, checksum)
 	}
 	client := newDownloadClient()
@@ -109,6 +113,7 @@ func newDownloadClient() *http.Client {
 		Timeout: downloadTimeout,
 		Transport: &http.Transport{
 			Proxy:                 http.ProxyFromEnvironment,
+			DisableCompression:    true,
 			DialContext:           (&net.Dialer{Timeout: 15 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
 			TLSHandshakeTimeout:   10 * time.Second,
 			ResponseHeaderTimeout: 30 * time.Second,
@@ -124,6 +129,10 @@ func newDownloadClient() *http.Client {
 }
 
 func downloadHTTP(ctx context.Context, source *url.URL, dir string, checksum []byte, client *http.Client) error {
+	return downloadHTTPLimited(ctx, source, dir, checksum, client, defaultLimits())
+}
+
+func downloadHTTPLimited(ctx context.Context, source *url.URL, dir string, checksum []byte, client *http.Client, limits resourceLimits) error {
 	slog.InfoContext(ctx, "下载套件", "host", source.Host)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, source.String(), nil)
 	if err != nil {
@@ -131,7 +140,8 @@ func downloadHTTP(ctx context.Context, source *url.URL, dir string, checksum []b
 	}
 	req.Header.Set("Accept", "application/octet-stream")
 	req.Header.Set("User-Agent", "xlp")
-	// 不手动设置 Accept-Encoding，由标准 Transport 协商并解码 gzip。
+	// 显式协商 gzip，在解码前后分别计数，避免压缩传输绕过字节上限。
+	req.Header.Set("Accept-Encoding", "gzip")
 	resp, err := client.Do(req)
 	if err != nil {
 		return err
@@ -140,15 +150,34 @@ func downloadHTTP(ctx context.Context, source *url.URL, dir string, checksum []b
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("套件下载响应状态错误：%d", resp.StatusCode)
 	}
-	if encoding := resp.Header.Get("Content-Encoding"); encoding != "" && !strings.EqualFold(strings.TrimSpace(encoding), "identity") {
-		return fmt.Errorf("套件响应使用不支持的内容编码 %q", encoding)
+	if resp.ContentLength > limits.source {
+		return fmt.Errorf("%w：下载响应长度", errResourceLimit)
 	}
-	return extractSource(ctx, resp.Body, dir, checksum)
+	body := limitReader(contextReader{ctx, resp.Body}, limits.source, "网络传输字节数")
+	switch strings.ToLower(strings.TrimSpace(resp.Header.Get("Content-Encoding"))) {
+	case "", "identity":
+	case "gzip":
+		decoded, err := gzip.NewReader(body)
+		if err != nil {
+			return err
+		}
+		defer decoded.Close()
+		body = decoded
+	default:
+		return fmt.Errorf("套件响应使用不支持的内容编码 %q", resp.Header.Get("Content-Encoding"))
+	}
+	return extractSourceLimited(ctx, body, dir, checksum, limits)
+
 }
 
 func extractSource(ctx context.Context, src io.Reader, dir string, checksum []byte) error {
+	return extractSourceLimited(ctx, src, dir, checksum, defaultLimits())
+}
+
+func extractSourceLimited(ctx context.Context, src io.Reader, dir string, checksum []byte, limits resourceLimits) error {
+	src = limitReader(src, limits.source, "套件来源")
 	if len(checksum) == 0 {
-		return Extract(ctx, src, dir)
+		return extractLimited(ctx, src, dir, limits)
 	}
 	// 摘要验证针对完整 SPK；验证通过之前不接触安装目录。
 	f, err := os.CreateTemp("", "xlp-spk-*")
@@ -167,5 +196,5 @@ func extractSource(ctx context.Context, src io.Reader, dir string, checksum []by
 	if _, err := f.Seek(0, io.SeekStart); err != nil {
 		return err
 	}
-	return Extract(ctx, f, dir)
+	return extractLimited(ctx, f, dir, limits)
 }
