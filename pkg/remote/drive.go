@@ -468,25 +468,32 @@ func (c *Client) TaskAction(ctx context.Context, target, id, action string) erro
 func (c *Client) reconcile(ctx context.Context, s submission) string {
 	page := ""
 	matched := ""
+	seen := map[string]bool{}
 	for i := 0; i < 5; i++ {
+		seen[page] = true
 		p, err := c.taskPage(ctx, s.Target, page)
 		if err != nil {
 			return ""
 		}
 		for _, t := range p.Tasks {
-			if t.URL == s.URL && path.Clean(t.Directory) == path.Clean(s.Directory) && t.createdAt >= s.At-5 && t.createdAt <= time.Now().Unix()+60 {
+			// 窗口固定在原提交时刻附近，不能随重试时间延长。
+			if t.URL == s.URL && path.Clean(t.Directory) == path.Clean(s.Directory) && t.createdAt >= s.At-5 && t.createdAt <= s.At+60 {
 				if matched != "" && matched != t.ID {
 					return ""
 				}
 				matched = t.ID
 			}
 		}
-		if p.NextPageToken == "" || p.NextPageToken == page {
-			break
+		if p.NextPageToken == "" {
+			return matched
+		}
+		if seen[p.NextPageToken] {
+			return ""
 		}
 		page = p.NextPageToken
 	}
-	return matched
+	// 达到扫描上限但仍有后续页时，无法证明已经找到的候选唯一。
+	return ""
 }
 
 func (c *Client) Create(ctx context.Context, req CreateRequest) (CreateResult, error) {
