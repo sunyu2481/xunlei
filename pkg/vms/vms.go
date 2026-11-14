@@ -35,10 +35,7 @@ type options struct {
 //
 // 父进程保留准备和回滚所需的身份，业务子进程通过上下文中的凭据降权。
 func Execute(ctx context.Context, execOpts ...Option) (err error) {
-	var opts options
-	for _, option := range execOpts {
-		option(&opts)
-	}
+	opts := newOptions(execOpts...)
 	if opts.userErr != nil {
 		return opts.userErr
 	}
