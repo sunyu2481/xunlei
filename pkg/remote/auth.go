@@ -60,7 +60,7 @@ func (c *Client) Login(ctx context.Context, username, password string, remember 
 		return failure("invalid_request", "请填写迅雷账号和密码")
 	}
 	old := c.snapshot()
-	if err := c.updateAndSave(func(s *state) error {
+	err := c.updateAndSave(func(s *state) error {
 		if s.Username != username {
 			*s = state{DeviceID: s.DeviceID}
 		}
@@ -70,11 +70,13 @@ func (c *Client) Login(ctx context.Context, username, password string, remember 
 		s.clearReview()
 		s.VerificationURL = ""
 		return nil
-	}); err != nil {
-		return err
-	}
-	if old.Username != username {
+	})
+	// 目录同步失败也可能已切换账号，缓存必须跟随实际采用的状态。
+	if old.Username != c.snapshot().Username {
 		c.relays = make(map[string]relay)
+	}
+	if err != nil {
+		return err
 	}
 	return c.login(ctx)
 }

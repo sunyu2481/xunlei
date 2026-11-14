@@ -99,14 +99,40 @@ func readState(path string) (state, error) {
 	return s, nil
 }
 
+// 文件操作按客户端隔离，便于在临时目录中验证各保存步骤失败后的状态。
+type stateFile interface {
+	Write([]byte) (int, error)
+	Sync() error
+	Close() error
+	Name() string
+}
+
+type stateFiles struct {
+	mkdirAll   func(string, os.FileMode) error
+	chmod      func(string, os.FileMode) error
+	createTemp func(string, string) (stateFile, error)
+	rename     func(string, string) error
+	open       func(string) (stateFile, error)
+}
+
+func localStateFiles() stateFiles {
+	return stateFiles{
+		mkdirAll: os.MkdirAll, chmod: os.Chmod, rename: os.Rename,
+		createTemp: func(dir, pattern string) (stateFile, error) { return os.CreateTemp(dir, pattern) },
+		open:       func(path string) (stateFile, error) { return os.Open(path) },
+	}
+}
+
 // save 在调用者持有操作锁时执行，临时文件从创建起即只允许当前用户读写。
 func (c *Client) save() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return c.writeState(c.state)
+	_, err := c.writeState(c.state)
+	return err
 }
 
-// updateAndSave 仅用于尚未发出上游写请求的本地修改，保存成功后才发布新状态。
+// updateAndSave 仅用于尚未发出上游写请求的本地修改，文件替换后才发布新状态。
+// 替换后同步失败仍采用已写入的状态并返回错误，避免内存与文件内容不一致。
 // 已取得的远端结果仍使用 update 和 save，保存失败时保留内存中的进度。
 func (c *Client) updateAndSave(fn func(*state) error) error {
 	c.mu.Lock()
@@ -117,32 +143,36 @@ func (c *Client) updateAndSave(fn func(*state) error) error {
 	if err := fn(&s); err != nil {
 		return err
 	}
-	if err := c.writeState(s); err != nil {
-		return err
+	replaced, err := c.writeState(s)
+	if replaced {
+		c.state = s
 	}
-	c.state = s
-	return nil
+	return err
 }
 
 // writeState 在调用者持有状态写锁时保存指定副本，不改变当前内存状态。
-func (c *Client) writeState(s state) error {
+// 返回值区分文件是否已替换；成功还要求同步状态目录及祖先目录。
+func (c *Client) writeState(s state) (replaced bool, err error) {
 	if !s.Remember {
 		s.Password = ""
 	}
 	b, err := json.MarshalIndent(s, "", "  ")
 	if err != nil {
-		return errors.New("编码远程登录状态失败")
+		return false, errors.New("编码远程登录状态失败")
 	}
-	dir := filepath.Dir(c.path)
-	if err = os.MkdirAll(dir, 0700); err != nil {
-		return errors.New("无法创建远程状态目录，请检查数据目录权限")
-	}
-	if err = os.Chmod(dir, 0700); err != nil {
-		return errors.New("无法设置远程状态目录权限")
-	}
-	f, err := os.CreateTemp(dir, ".state-*")
+	dir, err := filepath.Abs(filepath.Dir(c.path))
 	if err != nil {
-		return errors.New("无法写入远程登录状态，请检查数据目录权限")
+		return false, errors.New("无法定位远程状态目录")
+	}
+	if err = c.files.mkdirAll(dir, 0700); err != nil {
+		return false, errors.New("无法创建远程状态目录，请检查数据目录权限")
+	}
+	if err = c.files.chmod(dir, 0700); err != nil {
+		return false, errors.New("无法设置远程状态目录权限")
+	}
+	f, err := c.files.createTemp(dir, ".state-*")
+	if err != nil {
+		return false, errors.New("无法写入远程登录状态，请检查数据目录权限")
 	}
 	defer os.Remove(f.Name())
 	defer f.Close()
@@ -153,12 +183,36 @@ func (c *Client) writeState(s state) error {
 		err = f.Close()
 	}
 	if err == nil {
-		err = os.Rename(f.Name(), c.path)
+		err = c.files.rename(f.Name(), c.path)
 	}
 	if err != nil {
-		return errors.New("保存远程登录状态失败，请检查数据目录权限和剩余空间")
+		return false, errors.New("保存远程登录状态失败，请检查数据目录权限和剩余空间")
 	}
-	return nil
+	// 同步整个目录链，覆盖本次新建的多级目录，以及上次失败后留下的目录。
+	// 不能仅在首次创建目录时同步父目录，否则失败后的重试可能遗漏目录项。
+	for {
+		if err := c.syncStateDir(dir); err != nil {
+			return true, errors.New("远程登录状态已替换，但同步状态目录失败，请检查文件系统后重试")
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return true, nil
+		}
+		dir = parent
+	}
+}
+
+func (c *Client) syncStateDir(dir string) error {
+	f, err := c.files.open(dir)
+	if err != nil {
+		return err
+	}
+	err = f.Sync()
+	closeErr := f.Close()
+	if err != nil {
+		return err
+	}
+	return closeErr
 }
 
 func (c *Client) snapshot() state {

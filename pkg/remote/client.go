@@ -43,6 +43,7 @@ type Client struct {
 	closed                         bool
 	state                          state
 	path                           string
+	files                          stateFiles
 	http                           *http.Client
 	relays                         map[string]relay
 	clientID, clientSecret, appKey string
@@ -56,7 +57,7 @@ func New(path string) (*Client, error) {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	// 云端接口直连，避免继承容器中用于下载或构建的代理配置。
 	transport.Proxy = nil
-	c := &Client{state: s, path: path, gate: make(chan struct{}, 1), relays: make(map[string]relay),
+	c := &Client{state: s, path: path, files: localStateFiles(), gate: make(chan struct{}, 1), relays: make(map[string]relay),
 		http: &http.Client{Transport: transport, Timeout: 20 * time.Second,
 			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }},
 		clientID: "Xp6vsxz_7IYVw2BB", clientSecret: "Xp6vsy4tN9toTVdMSpomVdXpRmES", appKey: "34a062aaa22f906fca4fefe9fb3a3021"}
@@ -74,8 +75,15 @@ func (c *Client) Close() {
 	c.http.CloseIdleConnections()
 }
 func (c *Client) lock(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	select {
 	case c.gate <- struct{}{}:
+		if err := ctx.Err(); err != nil {
+			c.unlock()
+			return err
+		}
 		if c.closed {
 			c.unlock()
 			return failure("unavailable", "远程下载服务正在退出")
