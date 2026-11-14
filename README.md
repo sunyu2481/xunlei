@@ -26,7 +26,7 @@
 
 ## 使用
 
-源码构建使用 Linux 和 Go 1.26.11 或更新的受支持补丁版本；最低工具链版本见 `go.mod`。发布工作流使用该版本，并在构建前运行 `govulncheck` 检查已知可达漏洞。
+源码构建使用 Linux 和 Go 1.26.11 或更新的受支持补丁版本；最低工具链版本见 `go.mod`。工作流使用该版本，以普通用户运行测试、双架构 `go vet` 和 `govulncheck` 已知可达漏洞检查，全部通过才允许发布。需要根权限、真实挂载或修改网络队列的集成测试在独立环境中单独验证。
 
 `make -j2 build` 使用 GNU tar 并行构建两个架构，产物为 `artifacts/xlp-amd64`、`artifacts/xlp-arm64` 及对应压缩包；压缩包内的程序名均为 `xlp`。`make busybox`、`make ubuntu`、`make debian` 默认按 Go 工具链报告的宿主架构编译并加载镜像，也可用 `TARGETARCH=amd64` 或 `TARGETARCH=arm64` 同时指定程序和镜像架构。
 
@@ -36,7 +36,7 @@ C 版认证程序可用 `make -C cmd/authenticate_cgi_c -j2 build` 重建，需�
 
 #### 镜像
 
-本仓库每次推送代码后，会自动构建 `linux/amd64` 和 `linux/arm64` 镜像并发布到 GitHub 容器仓库。工作流使用内置的 `GITHUB_TOKEN`，无需配置额外密钥，也可在 Actions 页面手动运行。
+本仓库每次推送代码后，会先验证并编译 `linux/amd64` 和 `linux/arm64` 程序，成功后才构建镜像并发布到 GitHub 容器仓库；验证失败、取消或跳过时不会发布。合并请求只运行验证。工作流使用内置的 `GITHUB_TOKEN`，仅发布作业具有包写入权限，无需配置额外密钥，也可在 Actions 页面手动运行。
 
 分支推送生成分支名标签，默认分支还会更新 `latest`；所有构建都会生成 `sha-<短提交号>` 标签，推送 Git 标签时生成对应的镜像标签。镜像地址跟随当前 GitHub 仓库，当前为：
 

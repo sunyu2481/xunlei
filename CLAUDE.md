@@ -61,4 +61,4 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## 镜像与发布
 
 - `Dockerfile` 先在 Ubuntu 阶段收集 glibc 运行库、`ip`、`tc`、证书和时区，最终镜像基于 `busybox:musl`。
-- `.github/workflows/docker.yml` 在推送任意分支或标签时都会构建并推送 `ghcr.io` 镜像，默认分支同时更新 `latest`。推送即发布。
+- `.github/workflows/docker.yml` 在推送、合并请求或手动运行时先进行普通权限验证；测试、双架构静态检查、漏洞扫描和编译全部通过后，推送或手动运行才会发布 `ghcr.io` 镜像。默认分支同时更新 `latest`；合并请求只验证。发布作业通过本次验证输出的产物编号下载双架构程序，只有该作业持有 `packages: write`。

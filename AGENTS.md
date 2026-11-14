@@ -23,7 +23,11 @@
 
 ## 测试规范
 
-使用标准库 `testing`，文件命名为 `*_test.go`，测试函数使用明确的 `Test功能名`。可用 `go test ./pkg/remote -run '^TestLoginAndRestore$' -v` 定向运行测试。新增测试应使用 `t.TempDir()` 并断言结果，避免依赖已有测试中的固定宿主机路径。目前没有覆盖率门槛；现有发布工作流仅构建、发布，不运行单元测试，提交前需自行验证。
+使用标准库 `testing`，文件命名为 `*_test.go`，测试函数使用明确的 `Test功能名`。可用 `go test ./pkg/remote -run '^TestLoginAndRestore$' -v` 定向运行测试。新增测试应使用 `t.TempDir()` 并断言结果，避免依赖已有测试中的固定宿主机路径。目前没有覆盖率门槛；工作流以普通用户执行 `go test`、双架构 `go vet`、漏洞扫描及编译，全部通过才允许发布。合并请求只验证，不发布。
+
+普通 CI 不启用真实挂载、网络队列或跨设备测试，也不通过 `sudo` 运行测试。需要根权限的测试会跳过；特殊集成验证应在无发布凭据的一次性容器或虚拟机中单独运行，按需设置 `XL_TEST_MOUNT=1`、`XL_TEST_CROSS_DEVICE_DIR` 或 `XL_NETLIMIT_TEST_TARGET`，并提供对应的挂载或网络管理能力。
+
+外部 GitHub Actions 固定到官方仓库的完整提交 SHA，并在行尾保留版本号；更新时核对上游版本标签、提交来源、动作入口及所需权限，再更新固定值。
 
 ## 提交与合并请求
 
