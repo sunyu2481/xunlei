@@ -40,7 +40,7 @@ func New(service Service) http.Handler {
 	register := func(pattern string, fn endpoint) {
 		mux.HandleFunc(pattern, func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Cache-Control", "no-store")
-			if r.Method != "GET" && (r.Header.Get("X-XLP-Request") != "1" || !strings.HasPrefix(r.Header.Get("Content-Type"), "application/json")) {
+			if r.Method != http.MethodGet && r.Method != http.MethodHead && (r.Header.Get("X-XLP-Request") != "1" || !strings.HasPrefix(r.Header.Get("Content-Type"), "application/json")) {
 				writeError(w, &remote.Error{Kind: "forbidden", Message: "请求来源无效，请从管理页面重试"})
 				return
 			}
