@@ -87,6 +87,15 @@ func OnExit(f func(*Cmd) error) Option    { return May(func(c *Cmd) { c.onExit =
 func LineOut(lineRecv func(string)) Option {
 	return May(func(c *Cmd) Closer {
 		w := LineWriter(lineRecv)
+		c.Stdout = w
+		return eClean(w)
+	})
+}
+
+// LineCombined 显式将标准输出与标准错误交给同一个逐行接收器。
+func LineCombined(lineRecv func(string)) Option {
+	return May(func(c *Cmd) Closer {
+		w := LineWriter(lineRecv)
 		c.Stdout, c.Stderr = w, w
 		return eClean(w)
 	})
