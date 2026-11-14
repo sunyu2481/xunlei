@@ -317,8 +317,10 @@ func (c *Client) Configure(ctx context.Context, settings Settings) error {
 		}
 		directory = f.Path
 	}
-	c.update(func(s *state) { s.Target = settings.Target; s.TargetName = name; s.Directory = directory })
-	return c.save()
+	return c.updateAndSave(func(s *state) error {
+		s.Target, s.TargetName, s.Directory = settings.Target, name, directory
+		return nil
+	})
 }
 
 func (c *Client) taskPage(ctx context.Context, target, page string) (TaskPage, error) {
@@ -525,20 +527,18 @@ func (c *Client) Create(ctx context.Context, req CreateRequest) (CreateResult, e
 	r := obj(resources[0])
 	name := first(str(r["name"]), str(r["file_name"]), "新建下载")
 	count := first(str(r["file_count"]), "1")
-	c.update(func(s *state) {
+	// 在发送前落盘，进程退出或响应丢失后仍能识别同一次提交。
+	if err = c.updateAndSave(func(s *state) error {
 		c.pruneSubmissions(s)
+		if len(s.Submissions) >= 2048 {
+			return failure("rate_limited", "近期提交记录过多，请稍后再试")
+		}
 		if s.Submissions == nil {
 			s.Submissions = map[string]submission{}
 		}
-	})
-	if len(c.snapshot().Submissions) >= 2048 {
-		return CreateResult{}, failure("rate_limited", "近期提交记录过多，请稍后再试")
-	}
-	// 在发送前落盘，进程退出或响应丢失后仍能识别同一次提交。
-	c.update(func(s *state) {
 		s.Submissions[req.RequestID] = submission{Fingerprint: fingerprint, Target: req.Target, URL: link, Directory: folder.Path, At: time.Now().Unix()}
-	})
-	if err = c.save(); err != nil {
+		return nil
+	}); err != nil {
 		return CreateResult{}, err
 	}
 	body := object{"type": "user#download-url", "name": name, "file_name": name, "file_size": first(str(r["file_size"]), "0"), "space": req.Target,

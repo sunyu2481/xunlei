@@ -60,7 +60,7 @@ func (c *Client) Login(ctx context.Context, username, password string, remember 
 		return failure("invalid_request", "请填写迅雷账号和密码")
 	}
 	old := c.snapshot()
-	c.update(func(s *state) {
+	if err := c.updateAndSave(func(s *state) error {
 		if s.Username != username {
 			*s = state{DeviceID: s.DeviceID}
 		}
@@ -69,12 +69,12 @@ func (c *Client) Login(ctx context.Context, username, password string, remember 
 		// 手动重新登录时废弃上一次验证，避免失败后继续使用旧账号验证入口。
 		s.clearReview()
 		s.VerificationURL = ""
-	})
+		return nil
+	}); err != nil {
+		return err
+	}
 	if old.Username != username {
 		c.relays = make(map[string]relay)
-	}
-	if err := c.save(); err != nil {
-		return err
 	}
 	return c.login(ctx)
 }

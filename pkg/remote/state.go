@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"time"
@@ -102,7 +103,29 @@ func readState(path string) (state, error) {
 func (c *Client) save() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	return c.writeState(c.state)
+}
+
+// updateAndSave 仅用于尚未发出上游写请求的本地修改，保存成功后才发布新状态。
+// 已取得的远端结果仍使用 update 和 save，保存失败时保留内存中的进度。
+func (c *Client) updateAndSave(fn func(*state) error) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	s := c.state
+	s.ReviewCookies = maps.Clone(s.ReviewCookies)
+	s.Submissions = maps.Clone(s.Submissions)
+	if err := fn(&s); err != nil {
+		return err
+	}
+	if err := c.writeState(s); err != nil {
+		return err
+	}
+	c.state = s
+	return nil
+}
+
+// writeState 在调用者持有状态写锁时保存指定副本，不改变当前内存状态。
+func (c *Client) writeState(s state) error {
 	if !s.Remember {
 		s.Password = ""
 	}
