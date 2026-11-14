@@ -7,12 +7,12 @@ let generation = 0, pagesLoaded = 0, submissions = {};
 let loginGeneration = 0, verificationUsername = '', smsTimer = null, noticeTimer = null, refreshQueued = false;
 let visibleInPanel = window.parent === window;
 const queries = new Map();
+const maxSubmissions = 100;
 try { submissions = JSON.parse(sessionStorage.getItem('xlp-remote-submissions') || '{}'); } catch { /* 浏览器不支持存储时使用当前页面内存。 */ }
 if (!submissions || typeof submissions !== 'object' || Array.isArray(submissions)) submissions = {};
 
 function rememberSubmissions() {
-  const entries = Object.entries(submissions).slice(-100);
-  submissions = Object.fromEntries(entries);
+  // 保留已有编号，容量不足时在提交入口拒绝新增，不能淘汰未知结果。
   try { sessionStorage.setItem('xlp-remote-submissions', JSON.stringify(submissions)); } catch { /* 存储满时仍可在本页检查提交结果。 */ }
 }
 function notice(message, success = false) {
@@ -405,11 +405,15 @@ $('create-form').addEventListener('submit', async (event) => {
   let completed = 0;
   for (const link of links) {
     const key = JSON.stringify([target, directory, link]);
-    const record = submissions[key] || { id: requestID(), done: false };
-    submissions[key] = record; rememberSubmissions();
+    let record = submissions[key];
     const row = element('div', 'result'), result = element('span', '', '正在提交…');
     const label = element('span', '', link); label.title = link; row.append(label, result); $('create-results').append(row);
     try {
+      if (!record) {
+        if (Object.keys(submissions).length >= maxSubmissions) throw new Error('提交记录已达上限，请先检查未完成项，关闭窗口清理已提交记录后再添加新链接。');
+        record = { id: requestID(), done: false };
+        submissions[key] = record; rememberSubmissions();
+      }
       if (!record.done) await api('/tasks', 'POST', { request_id: record.id, target, directory, url: link });
       record.done = true; completed++; result.textContent = '已提交'; result.className = 'ok';
     } catch (error) { result.textContent = error.message; result.className = 'error'; }

@@ -301,3 +301,87 @@ test('分页中途失败保留原任务并允许后续刷新', async () => {
   app.take('/tasks').respond(taskPage('重试任务')); await retry;
   assert.equal(app.node('task-list').children[0].children[1].children[0].textContent, '重试任务');
 });
+
+const submissionStorageKey = 'xlp-remote-submissions';
+const submissionLinks = (count, offset = 0) => Array.from({ length: count }, (_, index) => 'https://files.example.test/下载-' + (index + offset));
+const unknownSubmission = (request) => request.respond({ code: 'submission_unknown', message: '此前提交结果仍未确认，请检查原提交' }, 409);
+
+async function submitLinks(app, links, respond = unknownSubmission) {
+  app.node('links').value = links.join('\n');
+  const pending = app.node('create-form').emit('submit'), submitted = [];
+  for (;;) {
+    await settle();
+    if (!app.requests.some((request) => !request.taken && request.url.pathname === '/api/remote/tasks')) break;
+    const request = app.take('/tasks');
+    if (request.method === 'GET') request.respond(taskPage());
+    else { submitted.push(JSON.parse(request.body)); respond(request); }
+  }
+  await pending;
+  return submitted;
+}
+
+test('连续提交超过一百条未知结果后关闭重开仍沿用最早编号', async () => {
+  const app = await createApp(), links = submissionLinks(150);
+  let first;
+  for (let offset = 0; offset < links.length; offset += 50) {
+    app.run('openCreate()');
+    const requests = await submitLinks(app, links.slice(offset, offset + 50));
+    if (!offset) first = requests[0];
+    app.node('create-dialog').close(); await app.node('create-dialog').closed;
+  }
+  app.run('openCreate()');
+  const retried = await submitLinks(app, [links[0]]);
+  assert.equal(retried.length, 1);
+  assert.equal(retried[0].request_id, first.request_id, '未知提交必须保留原编号，不能改用新编号自动重发');
+});
+
+test('提交记录满额时拒绝新链接但仍检查已有编号', async () => {
+  const storage = new Map(), app = await createApp({ storage }), links = submissionLinks(100);
+  app.run('openCreate()');
+  const first = await submitLinks(app, links.slice(0, 50));
+  await submitLinks(app, links.slice(50));
+  const before = storage.get(submissionStorageKey);
+  const retried = await submitLinks(app, [submissionLinks(1, 100)[0], links[0]]);
+  assert.equal(retried.length, 1, '容量不足时不得向接口发送新编号');
+  assert.equal(retried[0].request_id, first[0].request_id);
+  assert.equal(storage.get(submissionStorageKey), before, '拒绝新提交不得改变未知记录');
+  assert.match(app.node('create-results').children[0].children[1].textContent, /已满|上限/);
+  assert.match(app.node('create-results').children[0].children[1].textContent, /检查|核对/);
+});
+
+test('恢复超过一百条旧未知记录时全部保留且拒绝继续新增', async () => {
+  const links = submissionLinks(150), status = account();
+  const records = Object.fromEntries(links.map((link, index) => [JSON.stringify([status.target, status.directory, link]), { id: index.toString(16).padStart(32, '0'), done: false }]));
+  const saved = JSON.stringify(records), storage = new Map([[submissionStorageKey, saved]]);
+  const app = await createApp({ storage });
+  app.run('openCreate()');
+  const retried = await submitLinks(app, [links[0]]);
+  assert.equal(retried[0].request_id, Object.values(records)[0].id);
+  assert.equal(storage.get(submissionStorageKey), saved, '保存时不得截断已有的超限未知记录');
+  assert.equal((await submitLinks(app, submissionLinks(1, 150))).length, 0);
+  app.node('create-dialog').close(); await app.node('create-dialog').closed;
+  const reloaded = await createApp({ storage });
+  reloaded.run('openCreate()');
+  const again = await submitLinks(reloaded, [links[0], links[149]]);
+  assert.deepEqual(again.map((request) => request.request_id), [Object.values(records)[0].id, Object.values(records)[149].id]);
+  assert.equal(storage.get(submissionStorageKey), saved);
+});
+
+test('满额后确认成功的记录在当前窗口复用并在关闭后释放容量', async () => {
+  const storage = new Map(), app = await createApp({ storage }), links = submissionLinks(100);
+  app.run('openCreate()');
+  const first = await submitLinks(app, links.slice(0, 50));
+  await submitLinks(app, links.slice(50));
+  const confirmed = await submitLinks(app, [links[0]], (request) => request.respond({}));
+  assert.equal(confirmed[0].request_id, first[0].request_id);
+  assert.equal((await submitLinks(app, [links[0]])).length, 0, '当前窗口内成功项不得重复发送');
+  const next = submissionLinks(1, 100);
+  assert.equal((await submitLinks(app, next)).length, 0, '关闭窗口前仍保留成功项的去重记录');
+  app.node('create-dialog').close(); await app.node('create-dialog').closed;
+  assert.equal(Object.keys(JSON.parse(storage.get(submissionStorageKey))).length, 99);
+  app.run('openCreate()');
+  assert.equal((await submitLinks(app, next)).length, 1);
+  assert.equal(Object.keys(JSON.parse(storage.get(submissionStorageKey))).length, 100);
+  const retried = await submitLinks(app, [links[1]]);
+  assert.equal(retried[0].request_id, first[1].request_id, '释放成功记录不得影响其他未知编号');
+});

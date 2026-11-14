@@ -60,7 +60,7 @@ const taskPage = (name = '模拟任务', next = '') => ({
 });
 const settle = () => new Promise((resolve) => setImmediate(resolve));
 
-async function createApp({ embedded = false, initialStatus = account(), initialize = true } = {}) {
+async function createApp({ embedded = false, initialStatus = account(), initialize = true, storage = new Map() } = {}) {
   const nodes = new Map(), filters = [], requests = [], timers = new Map();
   const html = fs.readFileSync(path.join(__dirname, 'static/view.html'), 'utf8');
   for (const match of html.matchAll(/<([a-z][\w-]*)\b([^>]*\b(?:id|data-filter)="[^>]+)>/g)) {
@@ -82,7 +82,6 @@ async function createApp({ embedded = false, initialStatus = account(), initiali
   document.querySelector = (selector) => document.querySelectorAll(selector)[0] || null;
   const window = new Node();
   window.parent = embedded ? { postMessage() {} } : window;
-  const storage = new Map();
   let timerID = 0;
   const setTimer = (callback, delay, repeat) => { timers.set(++timerID, { callback, delay, repeat }); return timerID; };
   const context = vm.createContext({
