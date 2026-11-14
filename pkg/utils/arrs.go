@@ -1,7 +1,6 @@
 package utils
 
 import (
-	"bufio"
 	"cmp"
 	"io"
 	"iter"
@@ -84,28 +83,6 @@ func ReduceSeq[T, R any](seq iter.Seq[T], walk func(agg R, item T) R, init R) R 
 		init = walk(init, item)
 	}
 	return init
-}
-
-func LineSeq(r io.Reader) iter.Seq[string] {
-	return func(yield func(string) bool) {
-		for scan := bufio.NewScanner(r); scan.Scan(); {
-			if !yield(scan.Text()) {
-				break
-			}
-		}
-	}
-}
-
-func LineWalk(r io.Reader, f func(s string)) {
-	for scan := bufio.NewScanner(r); scan.Scan(); {
-		f(scan.Text())
-	}
-}
-
-func LineWriter(lineRead func(line string)) io.WriteCloser {
-	r, w := io.Pipe()
-	go LineWalk(r, lineRead)
-	return w
 }
 
 func LogStd(w io.Writer) *log.Logger { return log.New(w, "", 0) }

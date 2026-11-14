@@ -1,16 +1,9 @@
 package cmdx
 
 import (
-	"bufio"
+	"github.com/cnk3x/xunlei/pkg/utils"
 	"io"
 )
 
-func LineWriter(lineRead func(s string)) io.WriteCloser {
-	r, w := io.Pipe()
-	go func() {
-		for scan := bufio.NewScanner(r); scan.Scan(); {
-			lineRead(scan.Text())
-		}
-	}()
-	return w
-}
+// LineWriter 复用有界分行与同步关闭实现。
+func LineWriter(lineRead func(string)) io.WriteCloser { return utils.LineWriter(lineRead) }
