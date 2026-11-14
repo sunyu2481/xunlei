@@ -89,7 +89,7 @@ func main() {
 		vms.Wait(cfg.Debug),
 		vms.User(cfg.Uid, cfg.Gid),
 		vms.Root(cfg.Root),
-		vms.Binds("/lib", "/bin", "/etc/ssl"),
+		vms.ReadOnlyBinds("/lib", "/bin", "/etc/ssl"),
 		vms.Links("/etc/timezone", "/etc/localtime", "/etc/resolv.conf"),
 		vms.Links("/etc/passwd", "/etc/group", "/etc/shadow"),
 		vms.Symlink("lib", filepath.Join(cfg.Root, "lib64")),

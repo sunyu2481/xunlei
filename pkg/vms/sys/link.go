@@ -9,7 +9,6 @@ import (
 	"path/filepath"
 	"syscall"
 
-	"github.com/cnk3x/xunlei/pkg/fo"
 	"github.com/cnk3x/xunlei/pkg/utils"
 )
 
@@ -18,6 +17,7 @@ type LinkOptions struct {
 	Source   string
 	DirMode  fs.FileMode
 	Optional bool
+	Copy     bool
 }
 
 func Links(ctx context.Context, items []LinkOptions) (undo Undo, err error) {
@@ -33,7 +33,7 @@ func LinkRs(ctx context.Context, root string, items []LinkOptions) (undo Undo, e
 	return doMulti(ctx, items, Link)
 }
 
-// link hard link, only for file
+// Link 链接普通文件；指定独立副本或跨设备时保留源文件的权限和属主。
 func Link(ctx context.Context, m LinkOptions) (undo Undo, err error) {
 	bq := utils.BackQueue(&undo, &err)
 	defer bq.ErrDefer()
@@ -51,16 +51,19 @@ func Link(ctx context.Context, m LinkOptions) (undo Undo, err error) {
 		}
 		bq.Put(du)
 
-		if err = os.Link(real, m.Target); !errors.Is(err, syscall.EXDEV) {
-			act = "link"
-			if err == nil {
-				bq.Put(newRm(ctx, m.Target, "unlink"))
+		if !m.Copy {
+			if err = os.Link(real, m.Target); !errors.Is(err, syscall.EXDEV) {
+				act = "link"
+				if err == nil {
+					bq.Put(newRm(ctx, m.Target, "unlink"))
+				}
+				return
 			}
-			return
 		}
 
 		act = "copy"
-		if err = fo.OpenRead(real, fo.ToFile(m.Target, fo.Perm(0777), fo.FlagExcl(false))); err == nil {
+		var created bool
+		if created, err = copyFile(real, m.Target, m.Copy); err == nil && created {
 			bq.Put(newRm(ctx, m.Target, "uncopy"))
 		}
 		return

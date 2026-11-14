@@ -49,6 +49,7 @@ func Links(files ...string) Option {
 				Source:   file,
 				Optional: true,
 				DirMode:  0777,
+				Copy:     true,
 			}
 			ro.links = append(ro.links, mOpts)
 		}
@@ -63,6 +64,15 @@ func Binds(dirs ...string) Option {
 				Optional: true,
 			}
 			ro.binds = append(ro.binds, mOpts)
+		}
+	}
+}
+
+// ReadOnlyBinds 将系统运行库等目录设为只读，禁止隔离内写入传回源目录。
+func ReadOnlyBinds(dirs ...string) Option {
+	return func(ro *options) {
+		for _, dir := range dirs {
+			ro.binds = append(ro.binds, sys.BindOptions{Source: dir, Optional: true, ReadOnly: true})
 		}
 	}
 }
