@@ -24,6 +24,11 @@ jobs:
         with:
           go-version-file: go.mod
 
+      - name: 检查已知漏洞
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@v1.9.0
+          govulncheck ./...
+
       - name: 编译两种架构的程序
         env:
           CGO_ENABLED: 0
