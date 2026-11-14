@@ -16,10 +16,11 @@ import (
 type Option func(ro *options)
 
 type options struct {
-	root string
-	uid  int
-	gid  int
-	wait bool
+	root    string
+	uid     int
+	gid     int
+	wait    bool
+	userErr error
 
 	mounts  []sys.MountOptions
 	binds   []sys.BindOptions
@@ -38,6 +39,9 @@ func Execute(ctx context.Context, execOpts ...Option) (err error) {
 	var opts options
 	for _, option := range execOpts {
 		option(&opts)
+	}
+	if opts.userErr != nil {
+		return opts.userErr
 	}
 
 	if opts.root != "" && opts.root != "/" {

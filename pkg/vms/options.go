@@ -2,6 +2,7 @@ package vms
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
 
 	"github.com/cnk3x/xunlei/pkg/utils"
@@ -14,7 +15,24 @@ func Run(run func(ctx context.Context) error) Option { return func(ro *options) 
 
 // User 配置业务子进程身份，回调应通过命令封装或上下文凭据启动子进程。
 func User[U, G utils.IntT | utils.UintT](uid U, gid G) Option {
-	return func(ro *options) { ro.uid, ro.gid = int(uid), int(gid) }
+	return func(ro *options) {
+		ro.userErr = ValidateUser(uid, gid)
+		if ro.userErr == nil {
+			ro.uid, ro.gid = int(uid), int(gid)
+		}
+	}
+}
+
+// ValidateUser 在整数转换和环境准备前拒绝负数、溢出及系统保留编号。
+// 编号零明确表示使用 root 用户或主组。
+func ValidateUser[U, G utils.IntT | utils.UintT](uid U, gid G) error {
+	if uid < 0 || uint64(uid) >= 1<<32-1 {
+		return fmt.Errorf("UID 必须在 0 到 4294967294 之间")
+	}
+	if gid < 0 || uint64(gid) >= 1<<32-1 {
+		return fmt.Errorf("GID 必须在 0 到 4294967294 之间")
+	}
+	return nil
 }
 
 func Wait(wait ...bool) Option {

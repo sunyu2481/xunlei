@@ -6,12 +6,13 @@ import (
 	"log/slog"
 	"net"
 	"path/filepath"
-	"strconv"
+	"slices"
 	"strings"
 
 	"github.com/cnk3x/xunlei/pkg/flags"
 	"github.com/cnk3x/xunlei/pkg/log"
 	"github.com/cnk3x/xunlei/pkg/utils"
+	"github.com/cnk3x/xunlei/pkg/vms"
 	"github.com/cnk3x/xunlei/spk"
 )
 
@@ -44,6 +45,16 @@ type Config struct {
 
 // 默认配置端口2345，下载保存文件夹 /xunlei/downloads, 数据文件夹 /xunlei/data
 func ConfigBind(cfg *Config) (err error) {
+	next := *cfg
+	next.DirDownload = slices.Clone(cfg.DirDownload)
+	if err := bindConfig(&next); err != nil {
+		return err
+	}
+	*cfg = next
+	return nil
+}
+
+func bindConfig(cfg *Config) (err error) {
 	cfg.Log = "info"
 	cfg.UploadInterface = "eth0"
 
@@ -71,11 +82,8 @@ func ConfigBind(cfg *Config) (err error) {
 	if err = flags.Parse(); err != nil {
 		return
 	}
-	// 环境变量绑定会忽略转换错误，上传限速必须避免静默失效。
-	if value := flags.GetEnv("", "XL_UPLOAD_LIMIT"); value != "" && !flags.Changed("upload_limit") {
-		if _, err = strconv.ParseUint(value, 10, 64); err != nil {
-			return fmt.Errorf("XL_UPLOAD_LIMIT 必须为非负整数，单位 KiB/s：%w", err)
-		}
+	if err = vms.ValidateUser(cfg.Uid, cfg.Gid); err != nil {
+		return fmt.Errorf("运行身份配置无效：%w", err)
 	}
 
 	log.ForDefault(utils.Iif(cfg.Debug, "debug", cfg.Log), false)

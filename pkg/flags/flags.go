@@ -52,9 +52,14 @@ func Var[T any](v T, name, short, usage string, env ...string) {
 func Parse() (err error) { return ParseFlag(CommandLine) }
 
 func VarFlag[T any](fSet *pflag.FlagSet, v T, name, short, usage string, env ...string) {
-	var s string
+	var envName, s string
 	if len(env) > 0 {
-		s = GetEnv("", env...)
+		for _, key := range env {
+			if value := os.Getenv(key); value != "" {
+				envName, s = key, value
+				break
+			}
+		}
 		usage = fmt.Sprintf("%s%s[%s]", usage, utils.Iif(usage != "", " ", ""), strings.Join(env, ", "))
 	}
 
@@ -119,14 +124,11 @@ func VarFlag[T any](fSet *pflag.FlagSet, v T, name, short, usage string, env ...
 		panic(fmt.Errorf("%s type %v(%T) not support", name, x, x))
 	}
 
-	fSet.VisitAll(func(f *pflag.Flag) {
-		if s != "" && f.Name == name {
-			f.DefValue = s
-		}
-	})
-
 	if s != "" && !reDeprecated.MatchString(usage) {
-		fSet.Set(name, s)
+		// 先解析命令行，仅为未覆盖的参数应用环境值，避免污染切片追加状态。
+		f := fSet.Lookup(name)
+		f.DefValue = s
+		f.Annotations = map[string][]string{"xlp-env": {envName, s}}
 	}
 }
 
@@ -146,7 +148,17 @@ func ParseFlag(fSet *pflag.FlagSet) (err error) {
 		}
 	})
 
-	return fSet.Parse(os.Args[1:])
+	if err := fSet.Parse(os.Args[1:]); err != nil {
+		return err
+	}
+	fSet.VisitAll(func(f *pflag.Flag) {
+		if env := f.Annotations["xlp-env"]; err == nil && len(env) == 2 && !f.Changed {
+			if e := f.Value.Set(env[1]); e != nil {
+				err = fmt.Errorf("环境变量 %s（--%s）无效：%w", env[0], f.Name, e)
+			}
+		}
+	})
+	return err
 }
 
 func GetEnv(def string, keys ...string) (s string) {
