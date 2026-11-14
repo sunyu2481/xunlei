@@ -62,7 +62,7 @@ func bindConfig(cfg *Config) (err error) {
 	flags.Var(&cfg.Ip, "dashboard_ip", "", "网页访问绑定IP，默认绑定所有IP", "XL_DASHBOARD_IP", "XL_IP")
 
 	flags.Var(&cfg.DashboardUsername, "dashboard_username", "", "网页访问的用户名", "XL_DASHBOARD_USERNAME", "XL_BA_USER")
-	flags.Var(&cfg.DashboardPassword, "dashboard_password", "", "网页访问的密码", "XL_DASHBOARD_PASSWORD", "XL_BA_PASSWORD")
+	flags.SecretVar(&cfg.DashboardPassword, "dashboard_password", "", "网页访问的密码", "XL_DASHBOARD_PASSWORD", "XL_BA_PASSWORD")
 
 	flags.Var(&cfg.DirDownload, "dir_download", "d", "下载保存文件夹，每个参数指定一个目录，可重复，目录名不能含冒号", "XL_DIR_DOWNLOAD")
 	flags.Var(&cfg.DirData, "dir_data", "D", "程序数据保存文件夹，其下'.drive'文件夹中，存储了登录的账号，下载进度等信息", "XL_DIR_DATA")
@@ -70,7 +70,7 @@ func bindConfig(cfg *Config) (err error) {
 	flags.Var(&cfg.Gid, "gid", "g", "运行迅雷的用户组ID", "XL_GID", "GID")
 	flags.Var(&cfg.PreventUpdate, "prevent_update", "", "阻止更新", "XL_PREVENT_UPDATE")
 	flags.Var(&cfg.Root, "root", "r", "主目录", "XL_ROOT", "XL_CHROOT")
-	flags.Var(&cfg.SpkUrl, "spk", "", "SPK 来源：HTTPS 或本地 file URL，可附加 #sha256=摘要", "XL_SPK")
+	flags.SecretVar(&cfg.SpkUrl, "spk", "", "SPK 来源：HTTPS 或本地 file URL，可附加 #sha256=摘要", "XL_SPK")
 	flags.Var(&cfg.SpkForceDownload, "spk_force_download", "F", "强制下载", "XL_SPK_FORCE_DOWNLOAD")
 	flags.Var(&cfg.UploadLimit, "upload_limit", "", "容器总出站限速，单位 KiB/s，0 表示不限速，需要 NET_ADMIN 权限", "XL_UPLOAD_LIMIT")
 	flags.Var(&cfg.UploadInterface, "upload_interface", "", "上传限速使用的容器 veth 网卡，只支持桥接网络", "XL_UPLOAD_INTERFACE")

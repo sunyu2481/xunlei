@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"slices"
 	"strconv"
-	"strings"
 )
 
 func HumanBytes[T UintT | IntT](n T, prec ...int) string {
@@ -19,9 +18,10 @@ func HumanBytes[T UintT | IntT](n T, prec ...int) string {
 	return fmt.Sprintf("%d bytes", n)
 }
 
+// PasswordMask 只区分是否设置密码，不暴露其内容或长度。
 func PasswordMask(s string) string {
-	if len(s) <= 1 {
-		return strings.Repeat("*", len(s))
+	if s == "" {
+		return ""
 	}
-	return s[:1] + strings.Repeat("*", len(s[1:]))
+	return "******"
 }

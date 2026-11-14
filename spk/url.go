@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -29,6 +30,25 @@ var DownloadUrl = utils.Iif(runtime.GOARCH == "amd64",
 
 const downloadTimeout = 10 * time.Minute
 
+// sourceError 隐藏地址及底层错误中的签名、用户信息和私有路径，同时保留错误链。
+type sourceError struct {
+	message string
+	err     error
+}
+
+func (e *sourceError) Error() string {
+	if errors.Is(e.err, context.Canceled) {
+		return e.message + "：操作已取消"
+	}
+	var timeout net.Error
+	if errors.As(e.err, &timeout) && timeout.Timeout() {
+		return e.message + "：操作超时"
+	}
+	return e.message
+}
+
+func (e *sourceError) Unwrap() error { return e.err }
+
 // Download 检查并下载套件。强制下载或 URL 附带可信摘要时，重新读取来源并验证。
 func Download(ctx context.Context, spkUrl string, dir string, force bool) error {
 	if err := ctx.Err(); err != nil {
@@ -48,12 +68,12 @@ func Download(ctx context.Context, spkUrl string, dir string, force bool) error 
 		// 非阻塞打开并检查类型，避免本地管道等特殊文件无限等待。
 		f, err := os.OpenFile(source.Path, os.O_RDONLY|syscall.O_NONBLOCK, 0)
 		if err != nil {
-			return err
+			return &sourceError{"读取本地套件失败", err}
 		}
 		defer f.Close()
 		info, err := f.Stat()
 		if err != nil {
-			return err
+			return &sourceError{"读取本地套件信息失败", err}
 		}
 		if !info.Mode().IsRegular() {
 			return fmt.Errorf("本地套件必须是普通文件")
@@ -71,7 +91,7 @@ func Download(ctx context.Context, spkUrl string, dir string, force bool) error 
 func parseSource(raw string) (*url.URL, []byte, error) {
 	u, err := url.Parse(raw)
 	if err != nil {
-		return nil, nil, fmt.Errorf("套件地址格式错误：%w", err)
+		return nil, nil, &sourceError{"套件地址格式错误", err}
 	}
 	u.Scheme = strings.ToLower(u.Scheme)
 	if u.Opaque != "" || u.User != nil {
@@ -136,7 +156,7 @@ func downloadHTTPLimited(ctx context.Context, source *url.URL, dir string, check
 	slog.InfoContext(ctx, "下载套件", "host", source.Host)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, source.String(), nil)
 	if err != nil {
-		return err
+		return &sourceError{"创建套件下载请求失败", err}
 	}
 	req.Header.Set("Accept", "application/octet-stream")
 	req.Header.Set("User-Agent", "xlp")
@@ -144,7 +164,7 @@ func downloadHTTPLimited(ctx context.Context, source *url.URL, dir string, check
 	req.Header.Set("Accept-Encoding", "gzip")
 	resp, err := client.Do(req)
 	if err != nil {
-		return err
+		return &sourceError{"套件下载请求失败", err}
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {

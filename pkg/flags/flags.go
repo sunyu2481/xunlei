@@ -49,6 +49,12 @@ func Var[T any](v T, name, short, usage string, env ...string) {
 	VarFlag(CommandLine, v, name, short, usage, env...)
 }
 
+// SecretVar 绑定敏感字符串，保留解析和覆盖语义，但不在帮助中展示默认值。
+func SecretVar(v *string, name, short, usage string, env ...string) {
+	VarFlag(CommandLine, v, name, short, usage, env...)
+	CommandLine.Lookup(name).DefValue = ""
+}
+
 func Parse() (err error) { return ParseFlag(CommandLine) }
 
 func VarFlag[T any](fSet *pflag.FlagSet, v T, name, short, usage string, env ...string) {

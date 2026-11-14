@@ -56,6 +56,11 @@ func run() error {
 	defer cancel()
 
 	ctx = log.Prefix(ctx, "main")
+	logConfiguration(ctx, cfg)
+	return runEnvironment(ctx, cfg, netlimit.Apply, vms.Execute)
+}
+
+func logConfiguration(ctx context.Context, cfg xunlei.Config) {
 	slog.InfoContext(ctx, `_  _ _  _ _  _ _    ____  _`)
 	slog.InfoContext(ctx, ` \/  |  | |\ | |    |___  |`)
 	slog.InfoContext(ctx, `_/\_ |__| | \| |___ |___  |`)
@@ -64,7 +69,7 @@ func run() error {
 	slog.InfoContext(ctx, fmt.Sprintf("port: %d", cfg.Port))
 	slog.InfoContext(ctx, fmt.Sprintf("ip: %s", cfg.Ip))
 	slog.InfoContext(ctx, fmt.Sprintf("dashboard username: %s", cfg.DashboardUsername))
-	slog.InfoContext(ctx, fmt.Sprintf("dashboard password: %s", utils.PasswordMask(cfg.DashboardPassword)))
+	slog.InfoContext(ctx, "面板访问认证", "enabled", cfg.DashboardPassword != "")
 	for i, dir := range cfg.DirDownload {
 		slog.InfoContext(ctx, fmt.Sprintf("dir download.%d: %s", i+1, dir))
 	}
@@ -72,14 +77,11 @@ func run() error {
 	slog.InfoContext(ctx, fmt.Sprintf("uid: %d", cfg.Uid))
 	slog.InfoContext(ctx, fmt.Sprintf("gid: %d", cfg.Gid))
 	slog.InfoContext(ctx, fmt.Sprintf("root: %s", cfg.Root))
-	slog.InfoContext(ctx, fmt.Sprintf("spk_url: %s", cfg.SpkUrl))
 	slog.InfoContext(ctx, fmt.Sprintf("spk_force_download: %t", cfg.SpkForceDownload))
 	slog.InfoContext(ctx, fmt.Sprintf("prevent update: %t", cfg.PreventUpdate))
 	slog.InfoContext(ctx, fmt.Sprintf("log: %s", cfg.Log))
 	slog.InfoContext(ctx, fmt.Sprintf("debug: %t", cfg.Debug))
 	slog.InfoContext(ctx, "上传限速配置", "limit_kib", cfg.UploadLimit, "interface", cfg.UploadInterface)
-
-	return runEnvironment(ctx, cfg, netlimit.Apply, vms.Execute)
 }
 
 func runEnvironment(ctx context.Context, cfg xunlei.Config,

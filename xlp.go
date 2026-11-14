@@ -210,25 +210,33 @@ func webRun(ctx context.Context, env []string, cfg Config, remoteClient *remote.
 }
 
 func mockEnv(dirData, dirDownload string) []string {
-	// ld_lib := os.Getenv("LD_LIBRARY_PATH")
-	return append(os.Environ(),
-		"SYNOPLATFORM="+SYNO_PLATFORM,
-		"SYNOPKG_PKGNAME="+SYNOPKG_PKGNAME,
-		"SYNOPKG_PKGDEST="+DIR_SYNOPKG_PKGDEST,
-		"SYNOPKG_DSM_VERSION_MAJOR="+SYNOPKG_DSM_VERSION_MAJOR,
-		"SYNOPKG_DSM_VERSION_MINOR="+SYNOPKG_DSM_VERSION_MINOR,
-		"SYNOPKG_DSM_VERSION_BUILD="+SYNOPKG_DSM_VERSION_BUILD,
-		"DriveListen=unix://"+SOCK_DRIVE_LISTEN,
+	// 启动器和网关共用允许列表，不继承面板凭据、代理或任意宿主变量。
+	// 固定路径同时覆盖网关默认继承的 PATH 和 LD_LIBRARY_PATH。
+	env := []string{
+		"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+		"LD_LIBRARY_PATH=/lib",
+		"SYNOPLATFORM=" + SYNO_PLATFORM,
+		"SYNOPKG_PKGNAME=" + SYNOPKG_PKGNAME,
+		"SYNOPKG_PKGDEST=" + DIR_SYNOPKG_PKGDEST,
+		"SYNOPKG_DSM_VERSION_MAJOR=" + SYNOPKG_DSM_VERSION_MAJOR,
+		"SYNOPKG_DSM_VERSION_MINOR=" + SYNOPKG_DSM_VERSION_MINOR,
+		"SYNOPKG_DSM_VERSION_BUILD=" + SYNOPKG_DSM_VERSION_BUILD,
+		"DriveListen=unix://" + SOCK_DRIVE_LISTEN,
 		// 内核和网页程序须使用与启动器命令行一致的地址访问认证及版本接口。
-		"LauncherListen=unix://"+SOCK_LAUNCHER_LISTEN,
+		"LauncherListen=unix://" + SOCK_LAUNCHER_LISTEN,
 		"PLATFORM=群晖",
-		"OS_VERSION="+SYNO_VERSION,
-		"ConfigPath="+dirData,
-		"HOME="+filepath.Join(dirData, ".drive"),
-		"DownloadPATH="+dirDownload,
+		"OS_VERSION=" + SYNO_VERSION,
+		"ConfigPath=" + dirData,
+		"HOME=" + filepath.Join(dirData, ".drive"),
+		"DownloadPATH=" + dirDownload,
 		"GIN_MODE=release",
-		// "LD_LIBRARY_PATH=/lib"+utils.Iif(ld_lib == "", "", ":")+ld_lib,
-	)
+	}
+	for _, key := range []string{"TZ", "LANG", "LC_ALL", "LC_CTYPE"} {
+		if value, ok := os.LookupEnv(key); ok {
+			env = append(env, key+"="+value)
+		}
+	}
+	return env
 }
 
 func mockSyno(ctx context.Context, root string) (undo func(), err error) {
