@@ -144,7 +144,7 @@ func Run(cfg Config) func(ctx context.Context) error {
 			cmdx.LineOut(func(s string) { slog.DebugContext(panCtx, "[std] "+s) }),
 			cmdx.PreStart(func(c *cmdx.Cmd) error {
 				ctx := log.Prefix(ctx, "check")
-				slog.DebugContext(ctx, "check uid", "uid", os.Geteuid(), "gid", os.Getegid())
+				slog.DebugContext(ctx, "子进程身份", "uid", cfg.Uid, "gid", cfg.Gid, "parent_uid", os.Geteuid(), "parent_gid", os.Getegid())
 				return nil
 			}),
 			cmdx.OnStarted(func(c *cmdx.Cmd) error {
@@ -176,13 +176,13 @@ func webRun(ctx context.Context, env []string, cfg Config, remoteClient *remote.
 	defer lLog.Close()
 
 	const CGI_PATH = "/webman/3rdparty/" + SYNOPKG_PKGNAME + "/index.cgi/"
-	mux.With(web.BasicAuth(cfg.DashboardUsername, cfg.DashboardPassword)).Mount(CGI_PATH, remoteweb.Panel(&cgi.Handler{
+	mux.With(web.BasicAuth(cfg.DashboardUsername, cfg.DashboardPassword)).Mount(CGI_PATH, remoteweb.Panel(&web.CGIHandler{Handler: cgi.Handler{
 		Dir:    DIR_SYNOPKG_WORK,
 		Path:   FILE_INDEX_CGI,
 		Env:    env,
 		Stderr: lErr,
 		Logger: utils.LogStd(lLog),
-	}))
+	}, Credential: cmdx.ProcessCredential(ctx)}))
 
 	if remoteClient != nil {
 		handler := web.BasicAuth(cfg.DashboardUsername, cfg.DashboardPassword)(remoteweb.New(remoteClient))

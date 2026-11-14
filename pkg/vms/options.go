@@ -12,6 +12,7 @@ func Root(root string) Option { return func(ro *options) { ro.root = root } }
 
 func Run(run func(ctx context.Context) error) Option { return func(ro *options) { ro.run = run } }
 
+// User 配置业务子进程身份，回调应通过命令封装或上下文凭据启动子进程。
 func User[U, G utils.IntT | utils.UintT](uid U, gid G) Option {
 	return func(ro *options) { ro.uid, ro.gid = int(uid), int(gid) }
 }

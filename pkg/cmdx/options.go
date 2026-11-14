@@ -41,14 +41,11 @@ func ProcAttr(options ...Option) Option {
 
 // Credential 以另外的身份运行外部程序
 func Credential(uid, gid uint32) Option {
-	var currentUid = os.Getuid()
 	return ProcAttr(May(func(c *Cmd) error {
-		if uid != 0 || gid != 0 {
-			if currentUid != 0 {
-				return fmt.Errorf("%s: root required, current uid: %d", os.ErrPermission, currentUid)
-			}
-			c.SysProcAttr.Credential = &syscall.Credential{Uid: uid, Gid: gid, NoSetGroups: true}
+		if os.Geteuid() != 0 {
+			return fmt.Errorf("%w：设置子进程身份需要根权限", os.ErrPermission)
 		}
+		c.SysProcAttr.Credential = &syscall.Credential{Uid: uid, Gid: gid}
 		return nil
 	}))
 }

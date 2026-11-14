@@ -20,7 +20,7 @@ type cmd = exec.Cmd
 
 func Run(ctx context.Context, name string, options ...Option) (err error) {
 	c := &Cmd{cmd: exec.CommandContext(ctx, name)}
-	c.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	c.SysProcAttr = &syscall.SysProcAttr{Setpgid: true, Credential: ProcessCredential(ctx)}
 	c.Cancel = func() error { return syscall.Kill(-c.Process.Pid, syscall.SIGKILL) }
 
 	clean, err := Options(options...)(c)

@@ -7,6 +7,7 @@ import (
 	"os"
 	"syscall"
 
+	"github.com/cnk3x/xunlei/pkg/cmdx"
 	"github.com/cnk3x/xunlei/pkg/utils"
 	"github.com/cnk3x/xunlei/pkg/vms/sys"
 )
@@ -30,10 +31,9 @@ type options struct {
 	run    func(ctx context.Context) error
 }
 
-// Execute 通过哦 chroot 实现文件系统隔离
+// Execute 通过根目录切换实现文件系统隔离。
 //
-//   - chroot + seteuid 实现权限最小化（临时降权）
-//   - 执行顺序 root 启动 → 准备 chroot 监狱 → chroot 切换 → setegid/seteuid 降权 → 执行核心任务 → 恢复 root 权限
+// 父进程保留准备和回滚所需的身份，业务子进程通过上下文中的凭据降权。
 func Execute(ctx context.Context, execOpts ...Option) (err error) {
 	var opts options
 	for _, option := range execOpts {
@@ -104,13 +104,7 @@ func chrootRun(ctx context.Context, root string, run func(ctx context.Context) e
 	}
 	defer chRootBack()
 
-	chUserBack, e := chuser(ctx, opts.uid, opts.gid)
-	if err = e; err != nil {
-		return
-	}
-	defer chUserBack()
-
-	err = run(ctx)
+	err = run(cmdx.WithCredential(ctx, uint32(opts.uid), uint32(opts.gid)))
 	return
 }
 
@@ -134,7 +128,7 @@ func chroot(ctx context.Context, root string) (rollback func(), err error) {
 			return
 		}
 
-		fd, e := syscall.Open("/", syscall.O_RDONLY, 0)
+		fd, e := syscall.Open("/", syscall.O_RDONLY|syscall.O_DIRECTORY|syscall.O_CLOEXEC, 0)
 		if err = errcheck(ctx, slog.LevelDebug, "openFd", e, "dir", "/", "fd", fd); err != nil {
 			return
 		}
@@ -153,38 +147,6 @@ func chroot(ctx context.Context, root string) (rollback func(), err error) {
 
 		if err = errcheck(ctx, slog.LevelDebug, "chdir", os.Chdir("/"), "dir", "/"); err != nil {
 			return
-		}
-	}
-	return
-}
-
-func chuser(ctx context.Context, uid, gid int) (rollback func(), err error) {
-	slog.InfoContext(ctx, "chuser start", "uid", uid, "gid", gid)
-	defer slog.InfoContext(ctx, "chuser done")
-
-	bq := utils.BackQueue(&rollback, &err)
-	defer bq.ErrDefer()
-
-	bq.Put(func() { slog.InfoContext(ctx, "chuser rollback done") })
-	defer bq.Put(func() { slog.InfoContext(ctx, "chuser rollback start") })
-
-	if uid > 0 || gid > 0 {
-		if err = errcheck(ctx, slog.LevelDebug, "check root", checkUid("chroot")); err != nil {
-			return
-		}
-
-		if gid > 0 {
-			if err = errcheck(ctx, slog.LevelInfo, "setegid", syscall.Setegid(gid), "gid", gid); err != nil {
-				return
-			}
-			bq.Put(func() { errcheck(ctx, slog.LevelInfo, "setegid", syscall.Setegid(0), "gid", 0) })
-		}
-
-		if uid > 0 {
-			if err = errcheck(ctx, slog.LevelInfo, "seteuid", syscall.Seteuid(uid), "uid", uid); err != nil {
-				return
-			}
-			bq.Put(func() { errcheck(ctx, slog.LevelInfo, "seteuid", syscall.Seteuid(0), "uid", 0) })
 		}
 	}
 	return
