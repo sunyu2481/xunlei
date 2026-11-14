@@ -46,7 +46,8 @@ func TestPanelExtendsOnlyOriginalHTML(t *testing.T) {
 			if strings.Replace(w.Body.String(), panelExtension, "", 1) != string(original) {
 				t.Fatal("扩展改变了原有页面内容")
 			}
-			if w.Header().Get("Content-Length") != "" || w.Header().Get("Content-Encoding") != "" || w.Header().Get("ETag") != "" || w.Header().Get("Cache-Control") != "no-store" || w.Header().Get("Set-Cookie") != "original=1" {
+			header := w.Result().Header
+			if header.Get("Content-Length") != "" || header.Get("Content-Encoding") != "" || header.Get("ETag") != "" || header.Get("Cache-Control") != "no-store" || header.Get("Set-Cookie") != "original=1" {
 				t.Fatal("首页响应头处理不正确")
 			}
 		})
