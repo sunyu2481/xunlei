@@ -5,7 +5,6 @@ import (
 	"cmp"
 	"encoding/json"
 	"fmt"
-	"log/slog"
 	"net"
 	"net/http"
 
@@ -69,22 +68,23 @@ func Blob[T ~[]byte | ~string](body T, contentType string, status int) http.Hand
 }
 
 func JSON(body any, status int) http.HandlerFunc {
-	return Blob(utils.Eon(json.Marshal(body)), "application/json", status)
+	data, err := json.Marshal(body)
+	if err != nil {
+		return func(w http.ResponseWriter, r *http.Request) { internalError(w, r, err) }
+	}
+	return Blob(data, "application/json", status)
 }
 
 func FBlob[T ~[]byte | ~string](body func() (T, error), contentType string) http.HandlerFunc {
-	headerContentType := "Content-Type"
 	return func(w http.ResponseWriter, r *http.Request) {
 		data, err := body()
-		if err == nil {
-			w.Header().Set(headerContentType, contentType)
-			w.WriteHeader(http.StatusOK)
-			w.Write([]byte(data))
-		} else {
-			w.Header().Set(headerContentType, "text/plain")
-			w.WriteHeader(http.StatusInternalServerError)
-			w.Write([]byte(err.Error()))
+		if err != nil {
+			internalError(w, r, err)
+			return
 		}
+		w.Header().Set("Content-Type", contentType)
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(data))
 	}
 }
 
@@ -92,13 +92,13 @@ func FJSON[T any](body func() (T, error)) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		val, err := body()
 		if err != nil {
-			http.Error(w, err.Error(), 500)
+			internalError(w, r, err)
 			return
 		}
 
 		data, err := json.Marshal(val)
 		if err != nil {
-			http.Error(w, err.Error(), 500)
+			internalError(w, r, err)
 			return
 		}
 
@@ -106,24 +106,6 @@ func FJSON[T any](body func() (T, error)) http.HandlerFunc {
 		w.WriteHeader(200)
 		w.Write(data)
 	}
-}
-
-// Recoverer 中间件，从panic中恢复并记录日志
-func Recoverer(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		defer func() {
-			if rvr := recover(); rvr != nil {
-				if rvr == http.ErrAbortHandler {
-					slog.DebugContext(r.Context(), "abort")
-					// panic(rvr)
-				}
-				if r.Header.Get("Connection") != "Upgrade" {
-					w.WriteHeader(http.StatusInternalServerError)
-				}
-			}
-		}()
-		next.ServeHTTP(w, r)
-	})
 }
 
 // BasicAuth 创建基础认证中间件
