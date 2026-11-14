@@ -16,6 +16,14 @@ type options struct {
 // Option 创建文件时候的选项
 type Option func(*options)
 
+func newOptions(defaultFlag int, fopts ...Option) options {
+	opts := options{flag: defaultFlag, perm: 0666, dirPerm: 0777}
+	for _, apply := range fopts {
+		apply(&opts)
+	}
+	return opts
+}
+
 // Perm 创建文件时候的权限
 func Perm(perm fs.FileMode) Option { return func(o *options) { o.perm = perm } }
 

@@ -1,7 +1,6 @@
 package fo
 
 import (
-	"cmp"
 	"io"
 	"os"
 	"path/filepath"
@@ -12,21 +11,20 @@ import (
 type Process func(*os.File) (err error)
 
 func openFile(name string, process Process, defaultFlag int, fOpts ...Option) (err error) {
-	opts := options{flag: defaultFlag}
-	for _, apply := range fOpts {
-		apply(&opts)
-	}
+	opts := newOptions(defaultFlag, fOpts...)
 
 	if opts.flag&os.O_CREATE != 0 {
-		if err = os.MkdirAll(filepath.Dir(name), cmp.Or(opts.dirPerm, 0777)); err != nil {
+		if err = os.MkdirAll(filepath.Dir(name), opts.dirPerm); err != nil {
 			return
 		}
 	}
 
-	f, e := os.OpenFile(name, opts.flag, cmp.Or(opts.perm, 0666))
-	if e != nil && !(opts.existOk && os.IsExist(e)) {
-		err = e
-		return
+	f, e := os.OpenFile(name, opts.flag, opts.perm)
+	if e != nil {
+		if opts.existOk && os.IsExist(e) {
+			return nil
+		}
+		return e
 	}
 
 	if err, e = process(f), f.Close(); err == nil && e != nil {

@@ -1,7 +1,6 @@
 package fo
 
 import (
-	"cmp"
 	"crypto/sha256"
 	"errors"
 	"fmt"
@@ -14,10 +13,7 @@ import (
 // AtomicWrite 在同一文件系统的私有临时目录中完成写入、同步及关闭后发布。
 // 支持覆盖和排他创建，不支持追加；失败不会截断已有文件。
 func AtomicWrite(name string, process Process, fopts ...Option) error {
-	opts := options{flag: os.O_CREATE | os.O_WRONLY | os.O_TRUNC}
-	for _, apply := range fopts {
-		apply(&opts)
-	}
+	opts := newOptions(os.O_CREATE|os.O_WRONLY|os.O_TRUNC, fopts...)
 	if opts.flag&os.O_APPEND != 0 {
 		return fmt.Errorf("原子写入不支持追加模式")
 	}
@@ -47,7 +43,7 @@ func AtomicWrite(name string, process Process, fopts ...Option) error {
 }
 
 func prepareFile(name string, process Process, opts options) (temp string, cleanup func(), err error) {
-	if err := os.MkdirAll(filepath.Dir(name), cmp.Or(opts.dirPerm, 0777)); err != nil {
+	if err := os.MkdirAll(filepath.Dir(name), opts.dirPerm); err != nil {
 		return "", nil, err
 	}
 	dir, err := os.MkdirTemp(filepath.Dir(name), ".xlp-file-*")
@@ -61,7 +57,7 @@ func prepareFile(name string, process Process, opts options) (temp string, clean
 		}
 	}()
 	temp = filepath.Join(dir, "内容")
-	f, err := os.OpenFile(temp, os.O_CREATE|os.O_EXCL|os.O_RDWR, cmp.Or(opts.perm, 0666))
+	f, err := os.OpenFile(temp, os.O_CREATE|os.O_EXCL|os.O_RDWR, opts.perm)
 	if err != nil {
 		return "", cleanup, err
 	}
@@ -75,10 +71,7 @@ func prepareFile(name string, process Process, opts options) (temp string, clean
 
 // MatchFile 校验已有文件是否与生成内容及权限一致，不改写已有文件。
 func MatchFile(name string, process Process, fopts ...Option) error {
-	opts := options{}
-	for _, apply := range fopts {
-		apply(&opts)
-	}
+	opts := newOptions(0, fopts...)
 	temp, cleanup, err := prepareFile(name, process, opts)
 	if err != nil {
 		return err
