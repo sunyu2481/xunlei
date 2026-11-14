@@ -15,6 +15,7 @@ import (
 	"sync"
 	"time"
 	"unicode"
+	"unicode/utf8"
 )
 
 // ANSI modes
@@ -39,6 +40,7 @@ func Prefix(ctx context.Context, prefix string) context.Context {
 	return context.WithValue(ctx, ctxPrefixKey, prefix)
 }
 
+// PrefixAttr 为当前记录设置前缀；其他内建同名属性仍作为普通业务属性输出。
 func PrefixAttr(prefix string) slog.Attr { return slog.String(prefixKey, prefix) }
 
 func GetPrefix(ctx context.Context) slog.Attr {
@@ -150,26 +152,9 @@ func (h *handler) Handle(ctx context.Context, r slog.Record) error {
 	var prefix string
 
 	r.Attrs(func(attr slog.Attr) bool {
-		if isTime(attr) {
-			r.Time = attr.Value.Time()
-		}
-
-		if isSource(attr) {
-			src, _ = attr.Value.Any().(*slog.Source)
-		}
-
 		if isPrefix(attr) {
 			prefix = attr.Value.String()
 		}
-
-		if isLevel(attr) {
-			r.Level = slog.Level(attr.Value.Int64())
-		}
-
-		if isMessage(attr) {
-			r.Message = attr.Value.String()
-		}
-
 		return true
 	})
 
@@ -227,14 +212,14 @@ func (h *handler) Handle(ctx context.Context, r slog.Record) error {
 
 	if prefix != "" {
 		buf.WriteByte('[')
-		buf.WriteString(prefix)
+		appendString(buf, prefix, false)
 		buf.WriteByte(']')
 		buf.WriteByte(' ')
 	}
 
 	// write message
 	if rep == nil {
-		buf.WriteString(r.Message)
+		appendString(buf, r.Message, false)
 		buf.WriteByte(' ')
 	} else if a := rep(nil /* groups */, slog.String(slog.MessageKey, r.Message)); a.Key != "" {
 		h.appendValue(buf, a.Value, false)
@@ -248,7 +233,7 @@ func (h *handler) Handle(ctx context.Context, r slog.Record) error {
 
 	// write attributes
 	r.Attrs(func(attr slog.Attr) bool {
-		if isPrefix(attr) || isTime(attr) || isSource(attr) || isLevel(attr) || isMessage(attr) {
+		if isPrefix(attr) {
 			return true
 		}
 
@@ -337,6 +322,10 @@ func appendLevelDelta(buf *buffer, delta slog.Level) {
 
 func (h *handler) appendSource(buf *buffer, src *slog.Source) {
 	const maxL = 15
+	if src == nil {
+		buf.WriteString("<nil>")
+		return
+	}
 
 	buf.WriteStringIf(!h.noColor, ansiFaint)
 	if src.File != "" {
@@ -348,7 +337,7 @@ func (h *handler) appendSource(buf *buffer, src *slog.Source) {
 		} else if l < maxL {
 			filename = leftPad(filename, maxL)
 		}
-		buf.WriteString(filename)
+		appendString(buf, filename, false)
 		buf.WriteByte(':')
 		buf.WriteString(rightPad(strconv.Itoa(src.Line), 3))
 	} else {
@@ -461,7 +450,8 @@ func (h *handler) appendTintError(buf *buffer, err error, groupsPrefix string) {
 }
 
 func appendString(buf *buffer, s string, quote bool) {
-	if quote && needsQuoting(s) {
+	// 普通消息保持原样；任何文本含控制字符时统一加引号并转义，避免改变日志行或终端状态。
+	if quote && needsQuoting(s) || !utf8.ValidString(s) || strings.ContainsFunc(s, func(r rune) bool { return !unicode.IsPrint(r) }) {
 		*buf = strconv.AppendQuote(*buf, s)
 	} else {
 		buf.WriteString(s)
@@ -480,16 +470,6 @@ func needsQuoting(s string) bool {
 	return false
 }
 
-func isPrefix(attr slog.Attr) bool { return attr.Key == prefixKey }
-
-func isSource(attr slog.Attr) bool {
-	return attr.Key == slog.SourceKey && attr.Value.Kind() == slog.KindAny
+func isPrefix(attr slog.Attr) bool {
+	return attr.Key == prefixKey && attr.Value.Kind() == slog.KindString
 }
-
-func isTime(attr slog.Attr) bool {
-	return attr.Key == slog.TimeKey && attr.Value.Kind() == slog.KindTime
-}
-
-func isLevel(attr slog.Attr) bool { return attr.Key == slog.LevelKey }
-
-func isMessage(attr slog.Attr) bool { return attr.Key == slog.MessageKey }
