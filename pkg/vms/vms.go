@@ -11,7 +11,6 @@ import (
 	"github.com/cnk3x/xunlei/pkg/vms/sys"
 )
 
-// type Undo func()
 type Option func(ro *options)
 
 type options struct {

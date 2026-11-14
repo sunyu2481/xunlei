@@ -17,6 +17,7 @@ func Writer(ctx context.Context) io.Writer {
 	return &stdWriter{ctx: ctx, level: slog.LevelInfo, h: slog.Default().Handler()}
 }
 
+// Caller 返回调用方的程序计数器，skip 为额外跳过的栈帧数。
 func Caller(skip int) (pc uintptr) {
 	var pcs [1]uintptr
 	runtime.Callers(2+skip, pcs[:])
@@ -30,6 +31,7 @@ func ErrDebug(err error) slog.Level {
 	return slog.LevelDebug
 }
 
+// WarnDebug 在错误非空时选择警告等级，否则选择调试等级。
 func WarnDebug(err error) slog.Level {
 	if err != nil {
 		return slog.LevelWarn
@@ -38,10 +40,9 @@ func WarnDebug(err error) slog.Level {
 }
 
 type stdWriter struct {
-	ctx       context.Context
-	level     slog.Leveler
-	h         slog.Handler
-	capturePC bool
+	ctx   context.Context
+	level slog.Leveler
+	h     slog.Handler
 }
 
 func (w *stdWriter) Write(buf []byte) (int, error) {
@@ -52,18 +53,13 @@ func (w *stdWriter) Write(buf []byte) (int, error) {
 	if !w.h.Enabled(w.ctx, level) {
 		return len(buf), nil
 	}
-	var pc uintptr
-	if w.capturePC {
-		pc = Caller(3)
-	}
-
 	n := 0
 	for line := range bytes.Lines(buf) {
 		message := line
 		if message[len(message)-1] == '\n' {
 			message = bytes.TrimSuffix(message[:len(message)-1], []byte{'\r'})
 		}
-		r := slog.NewRecord(time.Now(), level, string(message), pc)
+		r := slog.NewRecord(time.Now(), level, string(message), 0)
 		if err := w.h.Handle(w.ctx, r); err != nil {
 			return n, err
 		}

@@ -52,6 +52,8 @@ func Wait(wait ...bool) Option {
 	return func(ro *options) { ro.wait = len(wait) == 0 || wait[0] }
 }
 
+// After 在运行阶段结束且确认可安全清理后、准备资源回滚前调用。
+// 准备失败时不会调用；返回值替换普通运行错误，关键恢复错误仍保留并合并。
 func After(after func(ctx context.Context, runErr error) (err error)) Option {
 	return func(ro *options) { ro.after = after }
 }

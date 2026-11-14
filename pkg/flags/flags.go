@@ -41,7 +41,9 @@ var (
 func SetBuildTime(t time.Time) { buildTime = t }
 func SetVersion(v string)      { version = v }
 func GetBuildTime() time.Time  { return buildTime }
-func GetVersion() string       { return version }
+
+// GetVersion 返回 SetVersion 设置的帮助信息版本，未设置时为空。
+func GetVersion() string { return version }
 
 type FlagSet = pflag.FlagSet
 

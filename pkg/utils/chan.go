@@ -82,6 +82,7 @@ type ft[T any] interface {
 	~func() | ~func() error | ~func(T) | ~func(T) error
 }
 
+// BackExec 异步执行 exec，随后按顺序执行非空完成回调，最后关闭返回的通道。
 func BackExec(exec func(), onDone ...func()) <-chan struct{} {
 	done := make(chan struct{})
 	go func() {

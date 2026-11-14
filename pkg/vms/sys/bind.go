@@ -16,6 +16,7 @@ type BindOptions struct {
 	ReadOnly bool
 }
 
+// Binds 按顺序绑定各项，直接使用其目标路径；失败时回滚，成功时返回逆序回滚函数。
 func Binds(ctx context.Context, items []BindOptions) (undo Undo, err error) {
 	return doMulti(ctx, items, Bind)
 }

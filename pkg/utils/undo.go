@@ -40,6 +40,7 @@ func BackQueue(rollback *func(), autoRunIfErr *error) (q funcQueue) {
 	return
 }
 
+// Run 按传入顺序执行非空函数，函数异常按原样传播。
 func Run(fs ...func()) {
 	for _, f := range fs {
 		if f != nil {
@@ -48,6 +49,7 @@ func Run(fs ...func()) {
 	}
 }
 
+// BackwardRun 按传入顺序的逆序执行非空函数，函数异常按原样传播。
 func BackwardRun(fs ...func()) {
 	for _, f := range slices.Backward(fs) {
 		if f != nil {

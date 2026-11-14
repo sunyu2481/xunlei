@@ -30,7 +30,7 @@ type Router interface {
 	Handle(pattern string, handler http.Handler)
 }
 
-// NewMux 创建一个新的Mux实例，默认包含Recoverer中间件
+// NewMux 创建路由器；需要恢复请求异常时，应在注册路由前调用 Recoverer。
 func NewMux() *Mux {
 	return &Mux{Router: chi.NewMux()}
 }
@@ -69,6 +69,7 @@ func Blob[T ~[]byte | ~string](body T, contentType string, status int) http.Hand
 	}
 }
 
+// JSON 在构造处理器时编码固定响应；编码失败时返回通用错误响应。
 func JSON(body any, status int) http.HandlerFunc {
 	data, err := json.Marshal(body)
 	if err != nil {
@@ -90,6 +91,7 @@ func FBlob[T ~[]byte | ~string](body func() (T, error), contentType string) http
 	}
 }
 
+// FJSON 每次请求都调用 body 并编码响应；回调或编码失败时返回通用错误响应。
 func FJSON[T any](body func() (T, error)) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		val, err := body()

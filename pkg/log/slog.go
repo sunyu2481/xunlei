@@ -43,6 +43,7 @@ func Prefix(ctx context.Context, prefix string) context.Context {
 // PrefixAttr 为当前记录设置前缀；其他内建同名属性仍作为普通业务属性输出。
 func PrefixAttr(prefix string) slog.Attr { return slog.String(prefixKey, prefix) }
 
+// GetPrefix 返回上下文中的日志前缀；未设置时返回空属性。
 func GetPrefix(ctx context.Context) slog.Attr {
 	if v := ctx.Value(ctxPrefixKey); v != nil {
 		return slog.String(prefixKey, v.(string))

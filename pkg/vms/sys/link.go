@@ -21,6 +21,7 @@ type LinkOptions struct {
 	Copy     bool
 }
 
+// Links 按顺序创建各项链接，直接使用其目标路径；失败时回滚，成功时返回逆序回滚函数。
 func Links(ctx context.Context, items []LinkOptions) (undo Undo, err error) {
 	return doMulti(ctx, items, Link)
 }

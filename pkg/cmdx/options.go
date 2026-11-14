@@ -1,6 +1,7 @@
 package cmdx
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"log/slog"
@@ -31,6 +32,7 @@ func Options(options ...Option) Option {
 	}
 }
 
+// ProcAttr 确保系统进程属性存在，再按顺序应用选项。
 func ProcAttr(options ...Option) Option {
 	attrInit := May(func(c *Cmd) {
 		if c.SysProcAttr == nil {
@@ -76,11 +78,18 @@ func Flags(args ...string) Option {
 	return Args(selectedArgs...)
 }
 
-func Dir(dir string) Option               { return May(func(c *Cmd) { c.Dir = dir }) }
-func Env(env []string) Option             { return May(func(c *Cmd) { c.Env = env }) }
-func Stderr(w io.Writer) Option           { return May(func(c *Cmd) { c.Stderr = w }) }
-func Stdout(w io.Writer) Option           { return May(func(c *Cmd) { c.Stdout = w }) }
-func Stdin(r io.Reader) Option            { return May(func(c *Cmd) { c.Stdin = r }) }
+func Dir(dir string) Option   { return May(func(c *Cmd) { c.Dir = dir }) }
+func Env(env []string) Option { return May(func(c *Cmd) { c.Env = env }) }
+
+// Stderr 设置标准错误目标，其关闭由调用方负责。
+func Stderr(w io.Writer) Option { return May(func(c *Cmd) { c.Stderr = w }) }
+
+// Stdout 设置标准输出目标，其关闭由调用方负责。
+func Stdout(w io.Writer) Option { return May(func(c *Cmd) { c.Stdout = w }) }
+
+// Stdin 设置标准输入来源，其关闭由调用方负责。
+func Stdin(r io.Reader) Option { return May(func(c *Cmd) { c.Stdin = r }) }
+
 func PreStart(f func(*Cmd) error) Option  { return May(func(c *Cmd) { c.preStart = f }) }
 func OnStarted(f func(*Cmd) error) Option { return May(func(c *Cmd) { c.onStarted = f }) }
 func OnExit(f func(*Cmd) error) Option    { return May(func(c *Cmd) { c.onExit = f }) }
@@ -110,16 +119,19 @@ func LineErr(lineRecv func(string)) Option {
 	})
 }
 
+// LineIn 将各行以换行连接并追加末尾换行，作为标准输入。
 func LineIn(lines ...string) Option {
 	return Stdin(strings.NewReader(strings.Join(lines, "\n") + "\n"))
 }
 
+// Slog 按指定等级将两路输出逐行交给默认日志记录器，附带前缀和输出来源。
 func Slog(prefix string, level slog.Level) Option {
-	le := LineErr(func(s string) { slog.Debug("[stderr] "+s, log.PrefixAttr(prefix)) })
-	lo := LineOut(func(s string) { slog.Debug("[stdout] "+s, log.PrefixAttr(prefix)) })
+	le := LineErr(func(s string) { slog.LogAttrs(context.Background(), level, "[stderr] "+s, log.PrefixAttr(prefix)) })
+	lo := LineOut(func(s string) { slog.LogAttrs(context.Background(), level, "[stdout] "+s, log.PrefixAttr(prefix)) })
 	return Options(le, lo)
 }
 
+// LogStd 让子进程继承当前进程的标准输出和标准错误。
 func LogStd() Option {
 	return May(func(c *Cmd) { c.Stderr, c.Stdout = os.Stderr, os.Stdout })
 }

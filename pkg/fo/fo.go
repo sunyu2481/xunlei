@@ -43,7 +43,7 @@ func OpenRead(name string, process Process, options ...Option) (err error) {
 	return openFile(name, process, os.O_RDONLY, options...)
 }
 
-// To 将读取的文件写入到w
+// To 将打开的文件复制到 w，传播复制错误；不关闭 w。
 func To(w io.Writer) Process { return func(r *os.File) error { return utils.Eol(io.Copy(w, r)) } }
 
 // From 将源r写入到文件
@@ -54,12 +54,12 @@ func ToFile(to string, options ...Option) Process {
 	return func(src *os.File) error { return OpenWrite(to, From(src), options...) }
 }
 
-// FromFile 从文件读取并写入到打开的文件
+// FromFile 打开源文件并复制到目标，完成后关闭源文件并传播错误。
 func FromFile(from string, options ...Option) Process {
 	return func(w *os.File) error { return OpenRead(from, To(w), options...) }
 }
 
-// 将内容写入到打开的文件
+// Content 从打开文件的当前位置写入内容，不添加换行。
 func Content[T ~string | ~[]byte](content T) Process {
 	return func(w *os.File) (err error) { return utils.Eol(w.Write([]byte(content))) }
 }
@@ -81,5 +81,5 @@ func Lines[T ~string | ~[]byte](lines ...T) Process {
 	}
 }
 
-// 什么都不干
+// Nop 不读写打开的文件并返回成功，可用于仅创建文件的操作。
 func Nop(w *os.File) error { return nil }

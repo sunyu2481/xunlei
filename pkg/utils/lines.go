@@ -54,6 +54,7 @@ func walkLines(r io.Reader, yield func(string) bool) error {
 	}
 }
 
+// LineSeq 迭代各行或长行片段，提前退出时停止读取；需要读取错误时使用 LineWalk。
 func LineSeq(r io.Reader) iter.Seq[string] {
 	return func(yield func(string) bool) { walkLines(r, yield) }
 }

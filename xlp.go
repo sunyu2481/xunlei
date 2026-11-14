@@ -116,8 +116,8 @@ func Run(cfg Config) func(ctx context.Context) error {
 			return
 		}
 
-		dirData := cfg.DirData
-		if dirData, err = fixPath(cfg.DirData); err != nil {
+		dirData, err := fixPath(cfg.DirData)
+		if err != nil {
 			return
 		}
 
