@@ -13,26 +13,38 @@ import (
 )
 
 type state struct {
-	DeviceID        string                `json:"device_id"`
-	Username        string                `json:"username,omitempty"`
-	Password        string                `json:"password,omitempty"`
-	Remember        bool                  `json:"remember_password,omitempty"`
-	AccessToken     string                `json:"access_token,omitempty"`
-	RefreshToken    string                `json:"refresh_token,omitempty"`
-	CaptchaToken    string                `json:"captcha_token,omitempty"`
-	UserID          string                `json:"user_id,omitempty"`
-	ExpiresAt       int64                 `json:"expires_at,omitempty"`
-	Target          string                `json:"target,omitempty"`
-	TargetName      string                `json:"target_name,omitempty"`
-	Directory       string                `json:"directory,omitempty"`
-	CreditKey       string                `json:"credit_key,omitempty"`
-	ReviewURL       string                `json:"review_url,omitempty"`
-	ReviewKey       string                `json:"review_key,omitempty"`
-	ReviewToken     string                `json:"review_token,omitempty"`
-	ReviewCookies   map[string]string     `json:"review_cookies,omitempty"`
-	ReviewSentAt    int64                 `json:"review_sent_at,omitempty"`
-	VerificationURL string                `json:"verification_url,omitempty"`
-	Submissions     map[string]submission `json:"submissions,omitempty"`
+	DeviceID            string                `json:"device_id"`
+	Username            string                `json:"username,omitempty"`
+	Password            string                `json:"password,omitempty"`
+	Remember            bool                  `json:"remember_password,omitempty"`
+	AccessToken         string                `json:"access_token,omitempty"`
+	RefreshToken        string                `json:"refresh_token,omitempty"`
+	CaptchaToken        string                `json:"captcha_token,omitempty"`
+	UserID              string                `json:"user_id,omitempty"`
+	ExpiresAt           int64                 `json:"expires_at,omitempty"`
+	Target              string                `json:"target,omitempty"`
+	TargetName          string                `json:"target_name,omitempty"`
+	Directory           string                `json:"directory,omitempty"`
+	CreditKey           string                `json:"credit_key,omitempty"`
+	ReviewURL           string                `json:"review_url,omitempty"`
+	ReviewKey           string                `json:"review_key,omitempty"`
+	ReviewToken         string                `json:"review_token,omitempty"`
+	ReviewVerified      bool                  `json:"review_verified,omitempty"`
+	ReviewSecurityToken string                `json:"review_security_token,omitempty"`
+	ReviewReported      bool                  `json:"review_reported,omitempty"`
+	ReviewSession       string                `json:"review_session,omitempty"`
+	ReviewCookies       map[string]string     `json:"review_cookies,omitempty"`
+	ReviewSentAt        int64                 `json:"review_sent_at,omitempty"`
+	VerificationURL     string                `json:"verification_url,omitempty"`
+	Submissions         map[string]submission `json:"submissions,omitempty"`
+}
+
+func (s *state) clearReview() {
+	s.ReviewURL, s.ReviewKey, s.ReviewToken = "", "", ""
+	s.ReviewVerified, s.ReviewReported = false, false
+	s.ReviewSecurityToken, s.ReviewSession = "", ""
+	s.ReviewCookies = nil
+	s.ReviewSentAt = 0
 }
 
 type submission struct {

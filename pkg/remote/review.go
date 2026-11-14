@@ -20,6 +20,48 @@ import (
 var jsonpPattern = regexp.MustCompile(`(?s)^[\w.$]+\s*\((\{.*\})\)\s*;?\s*$`)
 var smsPattern = regexp.MustCompile(`^[0-9]{6}$`)
 
+func smsFailure(stage string, err error) error {
+	if err == nil {
+		return nil
+	}
+	var detail *Error
+	if errors.As(err, &detail) {
+		e := *detail
+		e.Message = stage + "失败：" + e.Message
+		return &e
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return fmt.Errorf("%s失败：%w", stage, err)
+	}
+	return failure("internal", stage+"失败：无法保存验证进度，请检查数据目录权限和剩余空间后重试")
+}
+
+// 各来源的明确失败先于字段合并判定，说明文字仍可搭配另一来源的成功标识。
+func reviewResultError(d object) error {
+	markers := object{}
+	for _, key := range []string{"errorCode", "error_code", "error"} {
+		if value, present := d[key]; present {
+			markers[key] = value
+		}
+	}
+	if err := businessError(markers); err != nil {
+		return err
+	}
+	if value, present := d["blogresult"]; present && str(value) != "0" {
+		return failure("invalid_request", "短信验证码未通过，请检查验证码或重新获取")
+	}
+	if value, present := d["code"]; present {
+		code, err := integer(value)
+		if err != nil {
+			return failure("upstream", "短信上报返回了无效状态码，请稍后重试")
+		}
+		if code != 200 {
+			return &Error{Kind: "upstream", RemoteCode: int(code), Message: fmt.Sprintf("短信上报被拒绝（错误码 %d），请稍后重试", code)}
+		}
+	}
+	return nil
+}
+
 func (c *Client) reviewParams() (url.Values, string, error) {
 	s := c.snapshot()
 	if s.ReviewURL == "" {
@@ -119,6 +161,12 @@ func (c *Client) reviewCall(ctx context.Context, method, endpoint string, params
 	if d == nil {
 		d = object{}
 	}
+	resultErr := reviewResultError(d)
+	for _, cookie := range resp.Cookies() {
+		if cookie.MaxAge >= 0 && resultErr == nil {
+			resultErr = reviewResultError(object{cookie.Name: cookie.Value})
+		}
+	}
 	c.update(func(s *state) {
 		if s.ReviewCookies == nil {
 			s.ReviewCookies = make(map[string]string)
@@ -129,71 +177,70 @@ func (c *Client) reviewCall(ctx context.Context, method, endpoint string, params
 			} else {
 				s.ReviewCookies[cookie.Name] = cookie.Value
 			}
-			if _, exists := d[cookie.Name]; !exists || method == "POST" {
+			if _, exists := d[cookie.Name]; !exists && cookie.MaxAge >= 0 {
 				d[cookie.Name] = cookie.Value
 			}
 		}
-		delete(s.ReviewCookies, "blogresult")
-		delete(s.ReviewCookies, "error")
+		for _, key := range []string{"blogresult", "error", "errorCode", "error_code", "code", "errorDesc", "error_description"} {
+			delete(s.ReviewCookies, key)
+		}
 		if key := str(d["creditkey"]); key != "" {
 			s.ReviewKey = key
 		}
 	})
-	if err = c.save(); err != nil {
-		return nil, err
-	}
-	return d, nil
+	return d, resultErr
 }
 
 func (c *Client) review(ctx context.Context, code string) (object, error) {
-	for attempt := 0; attempt < 3; attempt++ {
-		params, base, err := c.reviewParams()
-		if err != nil {
-			return nil, err
-		}
-		key := params.Get("creditkey")
-		method, path := "GET", "/xluser.core.login/v3/sendsms"
-		if code != "" {
-			method, path = "POST", "/xluser.core.login/v3/checksms"
-			params.Set("token", c.snapshot().ReviewToken)
-			params.Set("smsCode", code)
-		}
-		d, err := c.reviewCall(ctx, method, base+path, params)
-		if err != nil {
-			return nil, err
-		}
-		err = businessError(d)
-		var e *Error
-		if errors.As(err, &e) && e.Kind == "upstream" && e.RemoteCode == 0 {
-			stage := "短信发送"
-			if code != "" {
-				stage = "短信校验"
-			}
-			// 只记录字段类型及是否存在，不记录账号、验证码、令牌或上游原文。
-			slog.WarnContext(ctx, "短信验证响应摘要", "阶段", stage,
-				"errorCode类型", fmt.Sprintf("%T", d["errorCode"]), "error_code类型", fmt.Sprintf("%T", d["error_code"]),
-				"error类型", fmt.Sprintf("%T", d["error"]), "错误标识非空", str(d["error"]) != "",
-				"包含短信令牌", str(d["token"]) != "", "包含校验结果", str(d["blogresult"]) != "",
-				"包含中文说明", str(d["errorDesc"]) != "", "包含通用说明", str(d["error_description"]) != "")
-			e.Message = stage + "返回了未识别的状态，请查看服务日志中的「短信验证响应摘要」"
-		}
-		if !errors.As(err, &e) || e.Kind != "review_expired" {
-			return d, err
-		}
-		if key != c.snapshot().ReviewKey && attempt == 0 {
-			continue
-		}
-		c.update(func(s *state) { s.ReviewToken = "" })
-		if _, err = c.coreLogin(ctx); err != nil {
-			if !errors.As(err, &e) || e.Kind != "review_required" {
-				return nil, err
-			}
-		}
-		if code != "" {
-			return nil, failure("review_expired", "验证会话已刷新，请重新获取短信验证码")
-		}
+	params, base, err := c.reviewParams()
+	if err != nil {
+		return nil, err
 	}
-	return nil, failure("review_expired", "新的验证会话仍被拒绝，请稍后重新登录")
+	method, path := "GET", "/xluser.core.login/v3/sendsms"
+	if code != "" {
+		method, path = "POST", "/xluser.core.login/v3/checksms"
+		params.Set("token", c.snapshot().ReviewToken)
+		params.Set("smsCode", code)
+	}
+	d, err := c.reviewCall(ctx, method, base+path, params)
+	if d == nil {
+		return nil, err
+	}
+	if err == nil {
+		err = businessError(d)
+	}
+	var e *Error
+	if errors.As(err, &e) && e.Kind == "upstream" && e.RemoteCode == 0 {
+		stage := "短信发送"
+		if code != "" {
+			stage = "短信校验"
+		}
+		// 只记录字段类型及是否存在，不记录账号、验证码、令牌或上游原文。
+		slog.WarnContext(ctx, "短信验证响应摘要", "阶段", stage,
+			"errorCode类型", fmt.Sprintf("%T", d["errorCode"]), "error_code类型", fmt.Sprintf("%T", d["error_code"]),
+			"error类型", fmt.Sprintf("%T", d["error"]), "错误标识非空", str(d["error"]) != "",
+			"包含短信令牌", str(d["token"]) != "", "包含校验结果", str(d["blogresult"]) != "",
+			"包含中文说明", str(d["errorDesc"]) != "", "包含通用说明", str(d["error_description"]) != "")
+		e.Message = stage + "返回了未识别的状态，请查看服务日志中的「短信验证响应摘要」"
+	}
+	if !errors.As(err, &e) || e.Kind != "review_expired" {
+		if err != nil {
+			if saveErr := c.save(); saveErr != nil {
+				return nil, smsFailure("短信验证状态保存", saveErr)
+			}
+		}
+		return d, err
+	}
+	session, err := c.coreLogin(ctx)
+	if err != nil {
+		if !errors.As(err, &e) || e.Kind != "review_required" {
+			return nil, smsFailure("验证会话恢复", err)
+		}
+		return nil, failure("review_expired", "验证会话已刷新，请重新获取短信验证码")
+	}
+	// 已取得正常登录会话时直接换取令牌，不再向旧地址发送或校验短信。
+	c.update(func(s *state) { s.ReviewSession = session })
+	return nil, c.finishReviewLogin(ctx)
 }
 
 func (c *Client) SendSMS(ctx context.Context) error {
@@ -201,18 +248,27 @@ func (c *Client) SendSMS(ctx context.Context) error {
 		return err
 	}
 	defer c.unlock()
+	if s := c.snapshot(); s.ReviewVerified || s.ReviewSession != "" {
+		return c.continueReview(ctx)
+	}
 	if time.Now().Unix()-c.snapshot().ReviewSentAt < 60 {
 		return failure("rate_limited", "验证码已发送，请等待一分钟再试")
 	}
 	d, err := c.review(ctx, "")
 	if err != nil {
-		return err
+		return smsFailure("短信发送", err)
+	}
+	if d == nil {
+		return nil
 	}
 	if str(d["token"]) == "" {
 		return failure("upstream", "短信服务未返回验证会话，请稍后重新登录")
 	}
-	c.update(func(s *state) { s.ReviewToken = str(d["token"]); s.ReviewSentAt = time.Now().Unix() })
-	return c.save()
+	c.update(func(s *state) {
+		s.ReviewToken = str(d["token"])
+		s.ReviewSentAt = time.Now().Unix()
+	})
+	return smsFailure("短信发送状态保存", c.save())
 }
 
 func (c *Client) CheckSMS(ctx context.Context, code string) error {
@@ -223,32 +279,72 @@ func (c *Client) CheckSMS(ctx context.Context, code string) error {
 	if !smsPattern.MatchString(code) {
 		return failure("invalid_request", "请输入六位数字验证码")
 	}
+	if s := c.snapshot(); s.ReviewVerified || s.ReviewSession != "" {
+		return c.continueReview(ctx)
+	}
 	if c.snapshot().ReviewToken == "" {
 		return failure("invalid_request", "请先获取短信验证码")
 	}
 	d, err := c.review(ctx, code)
 	if err != nil {
-		return err
+		return smsFailure("短信校验", err)
+	}
+	if d == nil {
+		return nil
 	}
 	if str(d["blogresult"]) != "0" {
 		return failure("invalid_request", "短信验证码未通过，请检查验证码或重新获取")
 	}
-	p, base, err := c.reviewParams()
-	if err != nil {
-		return err
-	}
+	c.update(func(s *state) {
+		s.ReviewVerified = true
+		s.ReviewSecurityToken = str(d["securitytoken"])
+	})
+	return c.continueReview(ctx)
+}
+
+func (c *Client) continueReview(ctx context.Context) error {
 	s := c.snapshot()
-	q := url.Values{"type": {"sms"}, "scene": {"34"}, "userid": {p.Get("userID")}, "data": {str(d["securitytoken"])},
-		"result": {str(d["blogresult"])}, "appid": {p.Get("appid")}, "deviceid": {first(s.ReviewCookies["deviceid"], s.DeviceID)},
-		"creditkey": {first(s.ReviewCookies["creditkey"], s.ReviewKey)}}
-	report, reportErr := c.reviewCall(ctx, "GET", base+"/credit/v1/report", q)
-	key := c.snapshot().ReviewKey
-	if reportErr == nil && str(report["code"]) == "200" {
-		key = first(str(report["creditkey"]), key)
+	if s.ReviewSession != "" {
+		return c.finishReviewLogin(ctx)
 	}
-	c.update(func(s *state) { s.CreditKey = key; s.ReviewToken = "" })
-	if err = c.save(); err != nil {
-		return err
+	// 在后续请求前保存已完成的步骤；保存失败仍保留内存进度供本次进程继续。
+	if err := c.save(); err != nil {
+		return smsFailure("短信验证进度保存", err)
 	}
-	return c.login(ctx)
+	if !s.ReviewReported {
+		p, base, err := c.reviewParams()
+		if err != nil {
+			return smsFailure("短信上报", err)
+		}
+		q := url.Values{"type": {"sms"}, "scene": {"34"}, "userid": {p.Get("userID")}, "data": {s.ReviewSecurityToken},
+			"result": {"0"}, "appid": {p.Get("appid")}, "deviceid": {first(s.ReviewCookies["deviceid"], s.DeviceID)},
+			"creditkey": {first(s.ReviewCookies["creditkey"], s.ReviewKey)}}
+		report, reportErr := c.reviewCall(ctx, "GET", base+"/credit/v1/report", q)
+		if reportErr != nil {
+			return smsFailure("短信上报", reportErr)
+		}
+		if _, present := report["code"]; !present {
+			return failure("upstream", "短信上报失败：服务未返回确认状态，请稍后重试")
+		}
+		c.update(func(s *state) {
+			s.CreditKey = first(str(report["creditkey"]), s.ReviewKey)
+			s.ReviewReported = true
+		})
+		if err = c.save(); err != nil {
+			return smsFailure("短信上报", err)
+		}
+	}
+	session, err := c.coreLogin(ctx)
+	if err != nil {
+		return smsFailure("验证后登录", err)
+	}
+	c.update(func(s *state) { s.ReviewSession = session })
+	return c.finishReviewLogin(ctx)
+}
+
+func (c *Client) finishReviewLogin(ctx context.Context) error {
+	if err := c.save(); err != nil {
+		return smsFailure("验证后登录会话保存", err)
+	}
+	return smsFailure("验证后登录", c.loginSession(ctx, c.snapshot().ReviewSession))
 }

@@ -67,9 +67,7 @@ func (c *Client) Login(ctx context.Context, username, password string, remember 
 		s.Username, s.Password, s.Remember = username, password, remember
 		s.AccessToken, s.RefreshToken, s.CaptchaToken, s.UserID = "", "", "", ""
 		// 手动重新登录时废弃上一次验证，避免失败后继续使用旧账号验证入口。
-		s.ReviewURL, s.ReviewKey, s.ReviewToken = "", "", ""
-		s.ReviewCookies = nil
-		s.ReviewSentAt = 0
+		s.clearReview()
 		s.VerificationURL = ""
 	})
 	if old.Username != username {
@@ -103,12 +101,10 @@ func (c *Client) coreLogin(ctx context.Context) (string, error) {
 		q.Set("deviceid", c.deviceSign())
 		u.RawQuery = q.Encode()
 		c.update(func(s *state) {
+			s.clearReview()
 			s.CreditKey = str(d["creditkey"])
 			s.ReviewURL = u.String()
 			s.ReviewKey = first(q.Get("creditkey"), s.CreditKey)
-			s.ReviewToken = ""
-			s.ReviewCookies = nil
-			s.ReviewSentAt = 0
 		})
 		if e = c.save(); e != nil {
 			return "", e
@@ -176,7 +172,11 @@ func (c *Client) login(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if err = c.captcha(ctx, "POST:/v1/auth/signin/token", true); err != nil {
+	return c.loginSession(ctx, session)
+}
+
+func (c *Client) loginSession(ctx context.Context, session string) error {
+	if err := c.captcha(ctx, "POST:/v1/auth/signin/token", true); err != nil {
 		return err
 	}
 	d, err := c.raw(ctx, "POST", accountURL+"/v1/auth/signin/token", nil,
@@ -188,9 +188,8 @@ func (c *Client) login(ctx context.Context) error {
 		return err
 	}
 	c.update(func(s *state) {
-		s.CreditKey, s.ReviewKey, s.ReviewURL, s.ReviewToken, s.VerificationURL = "", "", "", "", ""
-		s.ReviewCookies = nil
-		s.ReviewSentAt = 0
+		s.CreditKey, s.VerificationURL = "", ""
+		s.clearReview()
 		if !s.Remember {
 			s.Password = ""
 		}

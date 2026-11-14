@@ -25,6 +25,8 @@ func TestLoginDiscardsPreviousReview(t *testing.T) {
 				s.ReviewKey, s.ReviewToken = "上次信任键", "上次短信令牌"
 				s.ReviewCookies = map[string]string{"token": "上次短信令牌"}
 				s.ReviewSentAt = 123
+				s.ReviewVerified, s.ReviewReported = true, true
+				s.ReviewSecurityToken, s.ReviewSession = "上次校验凭据", "上次登录会话"
 				s.VerificationURL = accountURL + "/verify"
 			})
 			wantKind(t, c.Login(context.Background(), username, "密码", false), "upstream")
@@ -33,7 +35,7 @@ func TestLoginDiscardsPreviousReview(t *testing.T) {
 				t.Fatal(err)
 			}
 			for _, s := range []state{c.snapshot(), saved} {
-				if s.ReviewURL != "" || s.ReviewKey != "" || s.ReviewToken != "" || len(s.ReviewCookies) != 0 || s.ReviewSentAt != 0 || s.VerificationURL != "" {
+				if s.ReviewURL != "" || s.ReviewKey != "" || s.ReviewToken != "" || len(s.ReviewCookies) != 0 || s.ReviewSentAt != 0 || s.VerificationURL != "" || s.ReviewVerified || s.ReviewReported || s.ReviewSecurityToken != "" || s.ReviewSession != "" {
 					t.Fatal("重新登录失败后仍保留上次验证会话")
 				}
 			}
