@@ -129,11 +129,14 @@ jobs:
         uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5.10.0
         with:
           images: ghcr.io/${{ github.repository }}
+          # 引用标签优先于 latest 和提交标签，作为镜像版本元数据。
+          # 默认分支按原始名称匹配，同时限制引用类型，避免 Git 标签占用 latest。
           tags: |
-            type=ref,event=branch
-            type=ref,event=tag
-            type=sha
-            type=raw,value=latest,enable={{is_default_branch}}
+            type=ref,event=branch,prefix=branch-
+            type=ref,event=tag,prefix=tag-
+            type=sha,prefix=sha-
+            type=raw,value=latest,enable=${{ github.ref_type == 'branch' && '{{is_default_branch}}' || 'false' }}
+          # 必须禁用 Git 标签规则自动追加 latest，仅由上面的默认分支规则生成。
           flavor: latest=false
 
       - name: 构建并推送镜像
