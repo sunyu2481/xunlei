@@ -202,13 +202,18 @@ func (c *Client) applyToken(d object) error {
 	if str(d["access_token"]) == "" {
 		return failure("login_required", "迅雷未返回访问令牌，请重新登录")
 	}
+	expiresIn, _, err := integerField(d, "expires_in")
+	now := time.Now().Unix()
+	if err != nil || expiresIn > 1<<63-1-now {
+		return failure("upstream", "迅雷返回了无效的令牌有效期，请稍后重试")
+	}
 	c.update(func(s *state) {
 		s.AccessToken = str(d["access_token"])
 		s.RefreshToken = first(str(d["refresh_token"]), s.RefreshToken)
 		s.UserID = first(str(d["user_id"]), str(d["sub"]), s.UserID)
 		s.ExpiresAt = 0
-		if n := integer(d["expires_in"]); n > 0 {
-			s.ExpiresAt = time.Now().Unix() + n
+		if expiresIn > 0 {
+			s.ExpiresAt = now + expiresIn
 		}
 	})
 	return nil

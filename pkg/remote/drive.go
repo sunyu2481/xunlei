@@ -338,9 +338,26 @@ func (c *Client) taskPage(ctx context.Context, target, page string) (TaskPage, e
 		if space := str(t["space"]); space != "" && space != target {
 			continue
 		}
-		size := max(0, integer(t["file_size"]))
-		doneText := first(str(p["download_size"]), str(t["status_size"]))
-		done := max(0, integer(doneText))
+		size, _, sizeErr := integerField(t, "file_size")
+		done, hasDone, doneErr := integerField(p, "download_size")
+		if !hasDone {
+			done, hasDone, doneErr = integerField(t, "status_size")
+		}
+		speed, hasSpeed, speedErr := integerField(p, "speed")
+		if !hasSpeed {
+			speed, _, speedErr = integerField(t, "download_speed")
+		}
+		checked, hasChecked, checkedErr := integerField(p, "checked_size")
+		createdAt, _, createdErr := integerField(t, "created_time")
+		if createdErr != nil {
+			if created, e := time.Parse(time.RFC3339Nano, str(t["created_time"])); e == nil {
+				createdAt, createdErr = created.Unix(), nil
+			}
+		}
+		if sizeErr != nil || doneErr != nil || speedErr != nil || checkedErr != nil || createdErr != nil {
+			return TaskPage{}, failure("upstream", "迅雷任务包含无效数值，请稍后重试")
+		}
+		size, done, speed = max(0, size), max(0, done), max(0, speed)
 		// 迅雷任务直接提供百分比；缺少字节计数时不能用零覆盖有效进度。
 		progress, progressErr := strconv.ParseFloat(first(str(t["progress"]), str(p["progress"])), 64)
 		if progressErr != nil || math.IsNaN(progress) || math.IsInf(progress, 0) {
@@ -350,30 +367,24 @@ func (c *Client) taskPage(ctx context.Context, target, page string) (TaskPage, e
 			}
 		}
 		// 文件已下载完但仍在校验时，按原版面板显示校验进度。
-		if checked, e := strconv.ParseInt(str(p["checked_size"]), 10, 64); e == nil && checked >= 0 && size > 0 && done == size {
+		if hasChecked && checked >= 0 && size > 0 && done == size {
 			progress = 100 * float64(checked) / float64(size)
 		}
 		if math.IsNaN(progress) || math.IsInf(progress, 0) {
 			progress = 0
 		}
 		progress = min(100, max(0, progress))
-		if doneText == "" && size > 0 {
+		if !hasDone && size > 0 {
 			done = int64(float64(size) * progress / 100)
 		}
 		if str(t["phase"]) == "PHASE_TYPE_COMPLETE" {
 			progress, done = 100, size
 		}
-		createdAt := integer(t["created_time"])
 		if createdAt > 1e12 {
 			createdAt /= 1000
 		}
-		if createdAt == 0 {
-			if created, e := time.Parse(time.RFC3339Nano, str(t["created_time"])); e == nil {
-				createdAt = created.Unix()
-			}
-		}
 		out.Tasks = append(out.Tasks, Task{ID: str(t["id"]), Type: kind, Name: first(str(t["name"]), str(t["file_name"]), "未命名任务"),
-			Phase: str(t["phase"]), Progress: progress, Size: size, Done: done, Speed: max(0, integer(first(str(p["speed"]), str(t["download_speed"])))), Directory: str(p["parent_folder_path"]), URL: str(p["url"]), createdAt: createdAt})
+			Phase: str(t["phase"]), Progress: progress, Size: size, Done: done, Speed: speed, Directory: str(p["parent_folder_path"]), URL: str(p["url"]), createdAt: createdAt})
 	}
 	return out, nil
 }

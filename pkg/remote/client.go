@@ -111,7 +111,6 @@ func items(v any) []any {
 	}
 	return nil
 }
-func integer(v any) int64 { n, _ := strconv.ParseInt(str(v), 10, 64); return n }
 func first(v ...string) string {
 	for _, s := range v {
 		if s != "" {
@@ -122,14 +121,36 @@ func first(v ...string) string {
 }
 
 func businessError(d object) error {
-	code := integer(d["error_code"])
-	if code == 0 {
-		code = integer(d["errorCode"])
+	var code int64
+	successCode := false
+	for _, key := range []string{"error_code", "errorCode"} {
+		if value, present := d[key]; present {
+			n, err := integer(value)
+			if err != nil {
+				return failure("upstream", "迅雷返回了无效的错误码，请稍后重试")
+			}
+			if code == 0 {
+				code = n
+			}
+			successCode = successCode || n == 0
+		}
 	}
 	name := strings.ToLower(strings.TrimSpace(str(d["error"])))
+	if value, present := d["error"]; present {
+		switch value.(type) {
+		case string:
+		case json.Number, float64:
+			n, err := integer(value)
+			if err != nil {
+				return failure("upstream", "迅雷返回了无效的错误标识，请稍后重试")
+			}
+			name = strconv.FormatInt(n, 10)
+		default:
+			return failure("upstream", "迅雷返回了无效的错误标识，请稍后重试")
+		}
+	}
 	// 成功响应可能只带文字或零值标识，省略数字错误码；说明文字本身不代表失败。
 	successName := name == "success" || name == "ok" || name == "0"
-	successCode := str(d["error_code"]) == "0" || str(d["errorCode"]) == "0"
 	hasDescription := str(d["error_description"]) != "" || str(d["errorDesc"]) != ""
 	if code == 0 && (name == "" || successName) && (successCode || successName || !hasDescription) {
 		return nil
@@ -189,23 +210,39 @@ func (c *Client) raw(ctx context.Context, method, endpoint string, query url.Val
 	}
 	b, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20+1))
 	if err != nil {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
 		return nil, failure("network", "读取迅雷响应失败，请稍后重试")
 	}
 	if len(b) > 8<<20 {
+		if resp.StatusCode == http.StatusUnauthorized {
+			return nil, failure("login_required", "迅雷登录已失效，请重新登录")
+		}
 		return nil, failure("upstream", "迅雷响应过大，已停止读取")
 	}
 	var d object
 	dec := json.NewDecoder(bytes.NewReader(b))
 	dec.UseNumber()
-	if err = dec.Decode(&d); err != nil || d == nil {
+	err = dec.Decode(&d)
+	if resp.StatusCode == http.StatusUnauthorized {
+		// 明确的验证流程优先；无效响应或其他业务错误不能覆盖认证失效。
+		if err == nil && d != nil {
+			if e, ok := businessError(d).(*Error); ok {
+				switch e.Kind {
+				case "login_required", "captcha_required", "review_required", "review_expired":
+					return d, e
+				}
+			}
+		}
+		return d, failure("login_required", "迅雷登录已失效，请重新登录")
+	}
+	if err != nil || d == nil {
 		return nil, failure("upstream", fmt.Sprintf("迅雷返回了无效响应（HTTP %d）", resp.StatusCode))
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		if e := businessError(d); e != nil {
 			return d, e
-		}
-		if resp.StatusCode == http.StatusUnauthorized {
-			return d, failure("login_required", "迅雷登录已失效，请重新登录")
 		}
 		return d, failure("upstream", fmt.Sprintf("迅雷服务暂时不可用（HTTP %d）", resp.StatusCode))
 	}

@@ -92,11 +92,17 @@ func (c *Client) reviewCall(ctx context.Context, method, endpoint string, params
 	}
 	resp, err := c.http.Do(req)
 	if err != nil {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
 		return nil, failure("network", "无法连接短信验证服务，请稍后重试")
 	}
 	defer resp.Body.Close()
 	b, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
 		return nil, failure("network", "读取短信验证响应失败")
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
