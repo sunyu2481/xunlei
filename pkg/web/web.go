@@ -3,6 +3,8 @@ package web
 
 import (
 	"cmp"
+	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -118,10 +120,17 @@ func BasicAuth(username, password string) Middleware {
 		if username == "" {
 			username = "admin"
 		}
+		usernameHash := sha256.Sum256([]byte(username))
+		passwordHash := sha256.Sum256([]byte(password))
 		return func(next http.Handler) http.Handler {
 			return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				user, pass, ok := r.BasicAuth()
-				if !ok || user != username || pass != password {
+				userHash := sha256.Sum256([]byte(user))
+				passHash := sha256.Sum256([]byte(pass))
+				// 两项均比较固定长度摘要，避免用户名不匹配时跳过密码校验。
+				matches := subtle.ConstantTimeCompare(userHash[:], usernameHash[:]) &
+					subtle.ConstantTimeCompare(passHash[:], passwordHash[:])
+				if !ok || matches != 1 {
 					w.Header().Add("WWW-Authenticate", fmt.Sprintf(`Basic realm="%s"`, "xlp"))
 					w.WriteHeader(http.StatusUnauthorized)
 					return
