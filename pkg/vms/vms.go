@@ -5,10 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"os"
 	"syscall"
 
-	"github.com/cnk3x/xunlei/pkg/cmdx"
 	"github.com/cnk3x/xunlei/pkg/utils"
 	"github.com/cnk3x/xunlei/pkg/vms/sys"
 )
@@ -103,80 +101,15 @@ func Execute(ctx context.Context, execOpts ...Option) (err error) {
 
 	//after
 	if opts.after != nil {
-		if err = opts.after(ctx, err); err != nil {
-			return
+		afterErr := opts.after(ctx, err)
+		var recovery *rollbackError
+		if errors.As(err, &recovery) {
+			err = errors.Join(err, afterErr)
+		} else {
+			err = afterErr
 		}
 	}
 	return
-}
-
-// chroot & run
-func chrootRun(ctx context.Context, root string, run func(ctx context.Context) error, opts options) (err error) {
-	chRootBack, e := chroot(ctx, root)
-	if err = e; err != nil {
-		return
-	}
-	defer func() {
-		if !errors.Is(err, utils.ErrUnsafeCleanup) {
-			chRootBack()
-		}
-	}()
-
-	err = run(cmdx.WithCredential(ctx, uint32(opts.uid), uint32(opts.gid)))
-	return
-}
-
-func chroot(ctx context.Context, root string) (rollback func(), err error) {
-	slog.InfoContext(ctx, "chroot start", "root", root)
-	defer slog.InfoContext(ctx, "chroot done")
-
-	bq := utils.BackQueue(&rollback, &err)
-	defer bq.ErrDefer()
-
-	bq.Put(func() { slog.InfoContext(ctx, "chroot rollback done") })
-	defer bq.Put(func() { slog.InfoContext(ctx, "chroot rollback start") })
-
-	if root != "" && root != "/" {
-		if err = errcheck(ctx, slog.LevelDebug, "check root", checkUid("chroot")); err != nil {
-			return
-		}
-
-		wd, e := os.Getwd()
-		if err = errcheck(ctx, slog.LevelDebug, "getwd", e, "wd", wd); err != nil {
-			return
-		}
-
-		fd, e := syscall.Open("/", syscall.O_RDONLY|syscall.O_DIRECTORY|syscall.O_CLOEXEC, 0)
-		if err = errcheck(ctx, slog.LevelDebug, "openFd", e, "dir", "/", "fd", fd); err != nil {
-			return
-		}
-		bq.Put(func() { errcheck(ctx, slog.LevelDebug, "closeFd", syscall.Close(fd), "fd", fd) })
-
-		if err = errcheck(ctx, slog.LevelDebug, "chdir", os.Chdir(root), "dir", root); err != nil {
-			return
-		}
-		bq.Put(func() { errcheck(ctx, slog.LevelDebug, "chdir", os.Chdir(wd), "dir", wd) })
-
-		if err = errcheck(ctx, slog.LevelDebug, "chroot", syscall.Chroot("."), "dir", "."); err != nil {
-			return
-		}
-		bq.Put(func() { errcheck(ctx, slog.LevelDebug, "chroot", syscall.Chroot("."), "fd", fd) })
-		bq.Put(func() { errcheck(ctx, slog.LevelDebug, "fchdir", syscall.Fchdir(fd), "fd", fd) })
-
-		if err = errcheck(ctx, slog.LevelDebug, "chdir", os.Chdir("/"), "dir", "/"); err != nil {
-			return
-		}
-	}
-	return
-}
-
-func errcheck(ctx context.Context, level slog.Level, name string, err error, args ...any) error {
-	if err == nil {
-		slog.Log(ctx, level, "call "+name, args...)
-	} else {
-		slog.Log(ctx, utils.Iif(level < 0, level, slog.LevelWarn), "call "+name, append(args, "err", err.Error())...)
-	}
-	return err
 }
 
 func checkUid(name string) (err error) {

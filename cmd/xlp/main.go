@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -29,16 +30,26 @@ func init() {
 	}
 }
 
-func main() {
+func main() { os.Exit(exitCode(run)) }
+
+// exitCode 在业务入口和全部可行的延迟清理结束后决定进程退出码。
+func exitCode(run func() error) int {
+	if err := run(); err != nil {
+		slog.Error("exit", "err", err)
+		return 1
+	}
+	slog.Info("exit")
+	return 0
+}
+
+func run() error {
 	var cfg xunlei.Config
 	if err := xunlei.ConfigBind(&cfg); err != nil {
-		slog.Error("exit", "err", err)
-		os.Exit(1)
+		return err
 	}
 
 	if uid := os.Getuid(); uid != 0 {
-		slog.Error("exit", "err", "must run as root", "uid", uid)
-		os.Exit(1)
+		return fmt.Errorf("必须以根用户运行，当前 UID=%d", uid)
 	}
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -68,21 +79,29 @@ func main() {
 	slog.InfoContext(ctx, fmt.Sprintf("debug: %t", cfg.Debug))
 	slog.InfoContext(ctx, "上传限速配置", "limit_kib", cfg.UploadLimit, "interface", cfg.UploadInterface)
 
-	undoLimit, err := netlimit.Apply(ctx, cfg.UploadLimit, cfg.UploadInterface)
+	return runEnvironment(ctx, cfg, netlimit.Apply, vms.Execute)
+}
+
+func runEnvironment(ctx context.Context, cfg xunlei.Config,
+	apply func(context.Context, uint64, string) (func() error, error),
+	execute func(context.Context, ...vms.Option) error) (err error) {
+	undoLimit, err := apply(ctx, cfg.UploadLimit, cfg.UploadInterface)
 	if err != nil {
-		slog.ErrorContext(ctx, "上传限速初始化失败", "err", err)
-		os.Exit(1)
+		return fmt.Errorf("上传限速初始化失败：%w", err)
 	}
 	defer func() {
-		if err := undoLimit(); err != nil {
-			slog.WarnContext(ctx, "清理上传限速失败", "err", err)
+		if errors.Is(err, utils.ErrUnsafeCleanup) {
+			slog.WarnContext(ctx, "根目录或活动任务状态不可信，跳过依赖宿主机路径的限速清理")
+			return
+		}
+		if cleanupErr := undoLimit(); cleanupErr != nil {
+			err = errors.Join(err, fmt.Errorf("清理上传限速失败：%w", cleanupErr))
 		}
 	}()
 	if cfg.UploadLimit > 0 {
 		slog.InfoContext(ctx, "上传限速已生效", "limit_kib", cfg.UploadLimit, "interface", cfg.UploadInterface)
 	}
-
-	err = vms.Execute(
+	return execute(
 		log.Prefix(ctx, "vms"),
 		vms.Before(xunlei.Before(cfg)),
 		vms.Run(xunlei.Run(cfg)),
@@ -95,10 +114,4 @@ func main() {
 		vms.Symlink("lib", filepath.Join(cfg.Root, "lib64")),
 		vms.Basic,
 	)
-
-	if err != nil {
-		slog.ErrorContext(ctx, "exit", "err", err)
-	} else {
-		slog.InfoContext(ctx, "exit")
-	}
 }
