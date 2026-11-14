@@ -233,13 +233,14 @@ func (c *Client) refresh(ctx context.Context) error {
 		d, err := c.raw(ctx, "POST", accountURL+"/v1/auth/token", nil, object{"grant_type": "refresh_token",
 			"refresh_token": s.RefreshToken, "client_id": c.clientID, "client_secret": c.clientSecret}, c.headers(false))
 		if err == nil {
-			err = c.applyToken(d)
-			if err == nil {
-				return c.save()
+			if err = c.applyToken(d); err != nil {
+				return err
 			}
+			return c.save()
 		}
+		// 只有上游明确拒绝认证才清理会话，其他续期失败保留原令牌供稍后重试。
 		var e *Error
-		if !errors.As(err, &e) || e.Kind == "network" || (e.Kind == "upstream" && e.RemoteCode == 0) {
+		if !errors.As(err, &e) || e.Kind != "login_required" {
 			return err
 		}
 	}
