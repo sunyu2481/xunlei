@@ -99,6 +99,12 @@ func Before(cfg Config) func(ctx context.Context) (func(), error) {
 			}
 		}
 
+		toolsUndo, e := prepareTools(ctx, cfg, sys.Mount)
+		if err = e; err != nil {
+			return
+		}
+		bq.Put(toolsUndo)
+
 		return
 	}
 }
@@ -122,6 +128,9 @@ func Run(cfg Config) func(ctx context.Context) error {
 		}
 
 		envs := mockEnv(dirData, strings.Join(dirDownload, ":"))
+		if !cfg.AllowTools {
+			envs = append(envs, "PluginPath="+filepath.Join(dirData, ".drive", "plugins"))
+		}
 
 		remoteClient, err := remote.New(filepath.Join(dirData, "remote", "state.json"))
 		if err != nil {
@@ -134,7 +143,7 @@ func Run(cfg Config) func(ctx context.Context) error {
 				cmdx.Flags(
 					"-launcher_listen", "unix://"+SOCK_LAUNCHER_LISTEN,
 					"-pid", FILE_PID,
-					"-update_url", utils.Iif(cfg.PreventUpdate, "null", ""),
+					"-update_url", utils.Iif(cfg.PreventUpdate || !cfg.AllowTools, "null", ""),
 					"-logfile", cfg.LauncherLogFile,
 				),
 				cmdx.Dir(DIR_SYNOPKG_WORK),
@@ -182,13 +191,17 @@ func webRun(ctx context.Context, env []string, cfg Config, remoteClient *remote.
 	}()
 
 	const CGI_PATH = "/webman/3rdparty/" + SYNOPKG_PKGNAME + "/index.cgi/"
-	mux.With(web.BasicAuth(cfg.DashboardUsername, cfg.DashboardPassword)).Mount(CGI_PATH, remoteweb.Panel(&web.CGIHandler{Handler: cgi.Handler{
+	cgiHandler := remoteweb.Panel(&web.CGIHandler{Handler: cgi.Handler{
 		Dir:    DIR_SYNOPKG_WORK,
 		Path:   FILE_INDEX_CGI,
 		Env:    env,
 		Stderr: lErr,
 		Logger: utils.LogStd(lLog),
-	}, Credential: cmdx.ProcessCredential(ctx)}))
+	}, Credential: cmdx.ProcessCredential(ctx)})
+	if !cfg.AllowTools {
+		cgiHandler = blockTools(cgiHandler)
+	}
+	mux.With(web.BasicAuth(cfg.DashboardUsername, cfg.DashboardPassword)).Mount(CGI_PATH, cgiHandler)
 
 	if remoteClient != nil {
 		handler := web.BasicAuth(cfg.DashboardUsername, cfg.DashboardPassword)(remoteweb.New(remoteClient))

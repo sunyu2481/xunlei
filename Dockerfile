@@ -41,6 +41,7 @@ ENV \
   XL_DASHBOARD_USERNAME= \
   XL_DIR_DOWNLOAD=/xunlei/downloads \
   XL_PREVENT_UPDATE= \
+  XL_ALLOW_TOOLS=false \
   XL_UID= \
   XL_GID= \
   XL_DEBUG= \

@@ -30,6 +30,7 @@ type Config struct {
 	Uid              int      //运行迅雷的用户ID
 	Gid              int      //运行迅雷的用户组ID
 	PreventUpdate    bool     //阻止更新
+	AllowTools       bool     //允许网心云等小工具，默认禁止安装和运行
 	SpkUrl           string   //HTTPS 或本地套件地址，可附加可信摘要
 	SpkForceDownload bool     //是否强制下载
 	UploadLimit      uint64   //网卡总出站限速，单位 KiB/s，零表示不限速
@@ -68,7 +69,8 @@ func bindConfig(cfg *Config) (err error) {
 	flags.Var(&cfg.DirData, "dir_data", "D", "程序数据保存文件夹，其下'.drive'文件夹中，存储了登录的账号，下载进度等信息", "XL_DIR_DATA")
 	flags.Var(&cfg.Uid, "uid", "u", "运行迅雷的用户ID", "XL_UID", "UID")
 	flags.Var(&cfg.Gid, "gid", "g", "运行迅雷的用户组ID", "XL_GID", "GID")
-	flags.Var(&cfg.PreventUpdate, "prevent_update", "", "阻止更新", "XL_PREVENT_UPDATE")
+	flags.Var(&cfg.PreventUpdate, "prevent_update", "", "阻止内核自动更新；禁用小工具时始终阻止", "XL_PREVENT_UPDATE")
+	flags.Var(&cfg.AllowTools, "allow_tools", "", "允许网心云等小工具安装和运行，默认禁止", "XL_ALLOW_TOOLS")
 	flags.Var(&cfg.Root, "root", "r", "主目录", "XL_ROOT", "XL_CHROOT")
 	flags.SecretVar(&cfg.SpkUrl, "spk", "", "SPK 来源：HTTPS 或本地 file URL，可附加 #sha256=摘要", "XL_SPK")
 	flags.Var(&cfg.SpkForceDownload, "spk_force_download", "F", "强制下载", "XL_SPK_FORCE_DOWNLOAD")
