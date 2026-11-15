@@ -74,13 +74,13 @@ func resourceToken(d object) (string, error) {
 	}
 	token, valid := value.(string)
 	if !valid || len(token) > 4096 {
-		return "", resourceError()
+		return "", resourceError("分页标记无效")
 	}
 	return token, nil
 }
 
-func resourceError() error {
-	return failure("resource_incomplete", "资源文件列表不完整或结构异常，请重新解析")
+func resourceError(reason string) error {
+	return failure("resource_incomplete", "资源文件列表不完整或结构异常（"+reason+"），请重新解析")
 }
 func resourceTooLarge() error {
 	return failure("resource_too_large", "资源超过本地完整预览上限，请使用迅雷客户端选择文件")
@@ -175,7 +175,7 @@ func (b *resourceBuilder) add(resources []any, parent string, depth int, single 
 	for _, value := range resources {
 		r, ok := value.(map[string]any)
 		if !ok {
-			return resourceError()
+			return resourceError("资源节点格式无效")
 		}
 		if e, present := obj(r["meta"])["error"]; present && e != nil && e != "" && str(e) != "0" {
 			return failure("resource_unavailable", "迅雷未能获取此资源的完整文件信息，请重新解析")
@@ -185,53 +185,53 @@ func (b *resourceBuilder) add(resources []any, parent string, depth int, single 
 			id = "single"
 		}
 		if id == "" {
-			return resourceError()
+			return resourceError("资源节点缺少标识")
 		}
 		if p := str(r["parent_id"]); p != "" && p != parent {
-			return resourceError()
+			return resourceError("目录与父级关系不一致")
 		}
 		isDir := false
 		if v, present := r["is_dir"]; present {
 			var valid bool
 			isDir, valid = v.(bool)
 			if !valid {
-				return resourceError()
+				return resourceError("文件或目录类型无效")
 			}
 		} else {
 			_, isDir = r["dir"]
 		}
 		name := first(str(r["name"]), str(r["file_name"]))
 		if name == "" {
-			return resourceError()
+			return resourceError("资源名称缺失")
 		}
 		size, hasSize, err := integerField(r, "file_size")
 		if err != nil || size < 0 || (!hasSize && !isDir) {
-			return resourceError()
+			return resourceError("文件大小缺失或无效")
 		}
 		n := ResourceFile{ID: id, ParentID: parent, Name: name, IsDir: isDir, Size: strconv.FormatInt(size, 10)}
 		if !isDir {
 			index, hasIndex, err := integerField(r, "file_index")
 			if err != nil || (hasIndex && (index < 0 || index > maxFileIndex)) || (!hasIndex && !single) {
-				return resourceError()
+				return resourceError("文件索引缺失或无效")
 			}
 			if hasIndex {
 				n.Index = &index
 			}
 			token, err := resourceToken(obj(r["dir"]))
 			if err != nil || len(items(obj(r["dir"])["resources"])) > 0 || token != "" {
-				return resourceError()
+				return resourceError("文件节点包含子目录数据")
 			}
 		}
 		count, hasCount, err := integerField(r, "file_count")
 		if err != nil || count < 0 {
-			return resourceError()
+			return resourceError("资源文件数量无效")
 		}
 		if old, exists := b.nodes[id]; exists {
 			a, _ := json.Marshal(old)
 			c, _ := json.Marshal(n)
 			oldCount, oldHasCount := b.counts[id]
 			if string(a) != string(c) || oldHasCount != hasCount || (hasCount && oldCount != count) {
-				return resourceError()
+				return resourceError("相同节点包含冲突信息")
 			}
 		} else {
 			if len(b.nodes) >= maxResourceNodes {
@@ -247,7 +247,7 @@ func (b *resourceBuilder) add(resources []any, parent string, depth int, single 
 			if !isDir {
 				if n.Index != nil {
 					if _, exists := b.indices[*n.Index]; exists {
-						return resourceError()
+						return resourceError("文件索引重复")
 					}
 					b.indices[*n.Index] = size
 				}
@@ -260,11 +260,11 @@ func (b *resourceBuilder) add(resources []any, parent string, depth int, single 
 		if isDir {
 			d, valid := r["dir"].(map[string]any)
 			if !valid {
-				return resourceError()
+				return resourceError("目录缺少文件列表")
 			}
 			if children, present := d["resources"]; present && children != nil {
 				if _, valid := children.([]any); !valid {
-					return resourceError()
+					return resourceError("目录文件列表格式无效")
 				}
 			}
 			if err := b.add(items(d["resources"]), id, depth+1, false); err != nil {
@@ -280,7 +280,7 @@ func (b *resourceBuilder) add(resources []any, parent string, depth int, single 
 				for _, p := range b.pages {
 					if p.parent == id {
 						if p.token != token {
-							return resourceError()
+							return resourceError("目录分页标记冲突")
 						}
 						found = true
 						break
@@ -328,7 +328,7 @@ func (c *Client) parseResource(ctx context.Context, target, link string) (*resou
 				return nil, err
 			}
 			if listID == "" || len(listID) > 256 || strings.ContainsAny(listID, "/\\?#") || listID == "." || listID == ".." || len(p.token) > 4096 || p.seen[p.token] {
-				return nil, resourceError()
+				return nil, resourceError("资源分页缺少有效标记或发生循环")
 			}
 			p.seen[p.token] = true
 			d, err = c.request(ctx, "GET", driveURL+"/resource/list/"+url.PathEscape(listID), url.Values{"page_token": {p.token}}, nil)
@@ -337,7 +337,7 @@ func (c *Client) parseResource(ctx context.Context, target, link string) (*resou
 			}
 			list = obj(d["list"])
 			if _, valid := list["resources"].([]any); !valid {
-				return nil, resourceError()
+				return nil, resourceError("分页响应缺少文件列表")
 			}
 			if err = b.add(items(list["resources"]), p.parent, p.depth, false); err != nil {
 				return nil, err
@@ -349,7 +349,7 @@ func (c *Client) parseResource(ctx context.Context, target, link string) (*resou
 		}
 	}
 	if len(b.roots) != 1 {
-		return nil, resourceError()
+		return nil, resourceError("链接未对应唯一根资源")
 	}
 	p := &resourceSnapshot{indices: b.indices, mimeType: str(root["mime_type"]), fileID: str(root["file_id"])}
 	p.preview = ResourcePreview{PreviewID: randomID(), URL: link, Target: target, Kind: "files", Name: b.nodes[b.roots[0]].Name, Complete: true, ExpiresAt: time.Now().Add(previewLifetime), Files: []ResourceFile{}}
@@ -360,7 +360,6 @@ func (c *Client) parseResource(ctx context.Context, target, link string) (*resou
 	}
 	leaves := []leafVersion{}
 	var total int64
-	counts := map[string]int64{}
 	for _, n := range b.nodes {
 		p.preview.Files = append(p.preview.Files, n)
 		if n.IsDir {
@@ -372,20 +371,18 @@ func (c *Client) parseResource(ctx context.Context, target, link string) (*resou
 		}
 		size, _ := strconv.ParseInt(n.Size, 10, 64)
 		if size > math.MaxInt64-total {
-			return nil, resourceError()
+			return nil, resourceError("资源总大小溢出")
 		}
 		total += size
 		segments := []string{n.Name}
-		counts[n.ID]++
 		parent := n.ParentID
 		seen := map[string]bool{n.ID: true}
 		for parent != "" {
 			pn, exists := b.nodes[parent]
 			if !exists || !pn.IsDir || seen[parent] || len(segments) >= maxResourceDepth {
-				return nil, resourceError()
+				return nil, resourceError("文件路径缺少父级或发生循环")
 			}
 			seen[parent] = true
-			counts[parent]++
 			segments = append(segments, pn.Name)
 			parent = pn.ParentID
 		}
@@ -394,13 +391,13 @@ func (c *Client) parseResource(ctx context.Context, target, link string) (*resou
 		}
 		leaves = append(leaves, leafVersion{n.Index, segments, n.Size})
 	}
-	for id, count := range b.counts {
-		if counts[id] != count {
-			return nil, resourceError()
-		}
+	// 官方创建参数仅使用根资源的文件总数。叶子及子目录摘要的计数语义未确认，
+	// 不能把其零值或子项数当作递归叶子总数，以免拒绝已经完整加载的文件树。
+	if count, present := b.counts[b.roots[0]]; present && count != int64(p.preview.TotalFileCount) {
+		return nil, resourceError("根资源文件总数与完整列表不一致")
 	}
 	if p.preview.TotalFileCount == 0 {
-		return nil, resourceError()
+		return nil, resourceError("资源没有可下载文件")
 	}
 	if len(leaves) == 1 && !isMagnetLink(link) && !b.nodes[b.roots[0]].IsDir {
 		p.preview.Kind = "single"
@@ -410,7 +407,7 @@ func (c *Client) parseResource(ctx context.Context, target, link string) (*resou
 			p.preview.Files[i].Index = nil
 		}
 	} else if len(b.indices) != len(leaves) {
-		return nil, resourceError()
+		return nil, resourceError("文件索引列表不完整")
 	}
 	p.preview.TotalSize = strconv.FormatInt(total, 10)
 	sort.Slice(leaves, func(i, j int) bool {

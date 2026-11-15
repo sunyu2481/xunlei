@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"math"
 	"net/http"
@@ -138,6 +139,46 @@ func Test资源异常不发放预览(t *testing.T) {
 			wantKind(t, err, tc.kind)
 			if len(c.previews) != 0 || len(c.snapshot().Submissions) != 0 || posts != 0 {
 				t.Fatal("异常解析发布预览或创建任务")
+			}
+		})
+	}
+}
+
+func Test资源计数只核对根摘要(t *testing.T) {
+	for _, count := range []any{0, "0", 1, "1", 999} {
+		t.Run(fmt.Sprint(count), func(t *testing.T) {
+			r := testResource()
+			var setCount func(object)
+			setCount = func(node object) {
+				for _, child := range items(obj(node["dir"])["resources"]) {
+					n := obj(child)
+					n["file_count"] = count
+					setCount(n)
+				}
+			}
+			setCount(r)
+			created := 0
+			c := resourceClient(t, r, func(w http.ResponseWriter, req *http.Request) bool {
+				if req.URL.Path != "/drive/v1/task" {
+					return false
+				}
+				created++
+				d := bodyOf(t, req)
+				if d["file_size"] != "600" || obj(d["params"])["sub_file_index"] != "0,2-3" || obj(d["params"])["total_file_count"] != "4" {
+					t.Fatal("非根计数影响了真实选择或任务总数")
+				}
+				respond(w, object{"task": object{"id": "已选择任务"}})
+				return true
+			})
+			p, err := c.ResolveResource(context.Background(), ResolveRequest{Target: "设备一", URL: testMagnet})
+			if err != nil || !p.Complete || p.TotalFileCount != 4 || p.TotalSize != "1000" {
+				t.Fatalf("非根计数不应使完整树失败：%+v %v", p, err)
+			}
+			if created != 0 || len(c.snapshot().Submissions) != 0 {
+				t.Fatal("解析触发创建")
+			}
+			if _, err = c.Create(context.Background(), selectedRequest(p, 0, 2, 3)); err != nil || created != 1 {
+				t.Fatalf("显式选择创建失败：%v", err)
 			}
 		})
 	}
