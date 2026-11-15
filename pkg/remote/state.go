@@ -49,12 +49,40 @@ func (s *state) clearReview() {
 }
 
 type submission struct {
-	Fingerprint string `json:"fingerprint"`
-	Target      string `json:"target"`
-	URL         string `json:"url"`
-	Directory   string `json:"directory"`
-	TaskID      string `json:"task_id,omitempty"`
-	At          int64  `json:"at"`
+	unknownData     json.RawMessage
+	Version         int     `json:"version,omitempty"`
+	Account         string  `json:"account,omitempty"`
+	SelectionMode   string  `json:"selection_mode,omitempty"`
+	ResourceVersion string  `json:"resource_version,omitempty"`
+	FileIndices     []int64 `json:"file_indices,omitempty"`
+	Fingerprint     string  `json:"fingerprint"`
+	Target          string  `json:"target"`
+	URL             string  `json:"url"`
+	Directory       string  `json:"directory"`
+	TaskID          string  `json:"task_id,omitempty"`
+	At              int64   `json:"at"`
+}
+
+// 未知版本保持原字段，旧程序读写状态时不能丢弃未来版本的提交证据。
+func (s *submission) UnmarshalJSON(data []byte) error {
+	type fields submission
+	var parsed fields
+	if err := json.Unmarshal(data, &parsed); err != nil {
+		return err
+	}
+	*s = submission(parsed)
+	if s.Version != 0 && s.Version != 2 {
+		s.unknownData = append(json.RawMessage(nil), data...)
+	}
+	return nil
+}
+
+func (s submission) MarshalJSON() ([]byte, error) {
+	if len(s.unknownData) > 0 {
+		return s.unknownData, nil
+	}
+	type fields submission
+	return json.Marshal(fields(s))
 }
 
 // Status 仅包含允许发给管理页面的状态，不返回任何认证凭据。
@@ -139,12 +167,13 @@ func (c *Client) updateAndSave(fn func(*state) error) error {
 	defer c.mu.Unlock()
 	s := c.state
 	s.ReviewCookies = maps.Clone(s.ReviewCookies)
-	s.Submissions = maps.Clone(s.Submissions)
+	s.Submissions = cloneSubmissions(s.Submissions)
 	if err := fn(&s); err != nil {
 		return err
 	}
 	replaced, err := c.writeState(s)
 	if replaced {
+		c.invalidatePreviews(c.state, s)
 		c.state = s
 	}
 	return err
@@ -218,13 +247,35 @@ func (c *Client) syncStateDir(dir string) error {
 func (c *Client) snapshot() state {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	return c.state
+	s := c.state
+	s.ReviewCookies = maps.Clone(s.ReviewCookies)
+	s.Submissions = cloneSubmissions(s.Submissions)
+	return s
+}
+
+func cloneSubmissions(in map[string]submission) map[string]submission {
+	out := maps.Clone(in)
+	for id, s := range out {
+		s.FileIndices = append([]int64(nil), s.FileIndices...)
+		s.unknownData = append(json.RawMessage(nil), s.unknownData...)
+		out[id] = s
+	}
+	return out
+}
+
+// 缓存由操作锁保护；所有状态修改均发生在同一操作锁内。
+func (c *Client) invalidatePreviews(old, next state) {
+	if old.DeviceID != next.DeviceID || old.Username != next.Username || old.UserID != next.UserID || old.Target != next.Target || (old.AccessToken != "" && next.AccessToken == "") {
+		c.clearPreviews()
+	}
 }
 
 func (c *Client) update(fn func(*state)) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	old := c.state
 	fn(&c.state)
+	c.invalidatePreviews(old, c.state)
 }
 
 func (c *Client) Status() Status {
@@ -236,6 +287,9 @@ func (c *Client) Status() Status {
 
 func (c *Client) pruneSubmissions(s *state) {
 	for id, v := range s.Submissions {
+		if v.Version != 0 && v.Version != 2 {
+			continue
+		}
 		if time.Since(time.Unix(v.At, 0)) > 7*24*time.Hour {
 			delete(s.Submissions, id)
 		}

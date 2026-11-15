@@ -8,12 +8,34 @@ let loginGeneration = 0, verificationUsername = '', smsTimer = null, noticeTimer
 let visibleInPanel = window.parent === window;
 const queries = new Map();
 const maxSubmissions = 100;
-try { submissions = JSON.parse(sessionStorage.getItem('xlp-remote-submissions') || '{}'); } catch { /* 浏览器不支持存储时使用当前页面内存。 */ }
-if (!submissions || typeof submissions !== 'object' || Array.isArray(submissions)) submissions = {};
-
+let createEpoch = 0, resolving = false, entries = [], drafts = [], storageAvailable = true;
+function validRecord(r) {
+  return r && typeof r.id === 'string' && r.id.length >= 16 && r.id.length <= 80 &&
+    ['account', 'target', 'directory', 'url'].every((k) => typeof r[k] === 'string') &&
+    ['unknown', 'confirmed', 'missing'].includes(r.state) &&
+    ['legacy', 'files', 'single'].includes(r.mode) && typeof r.version === 'string' &&
+    Array.isArray(r.indices) && r.indices.length <= 5000 && r.indices.every((n) => Number.isSafeInteger(n) && n >= 0);
+}
+try {
+  const saved = JSON.parse(sessionStorage.getItem('xlp-remote-submissions') || '{}');
+  if (saved?.version === 2 && saved.records && typeof saved.records === 'object' && !Array.isArray(saved.records)) {
+    for (const [key, record] of Object.entries(saved.records)) if (validRecord(record)) submissions[key] = record;
+    if (Array.isArray(saved.drafts)) drafts = saved.drafts.slice(0, 50).filter((d) => d && typeof d.url === 'string' && typeof d.account === 'string' && typeof d.target === 'string' && typeof d.version === 'string' && Array.isArray(d.indices) && d.indices.length <= 5000 && d.indices.every((n) => Number.isSafeInteger(n) && n >= 0));
+  } else if (saved && typeof saved === 'object' && !Array.isArray(saved) && saved.version === undefined) {
+    for (const [key, r] of Object.entries(saved)) {
+      let intent; try { intent = JSON.parse(key); } catch { continue; }
+      if (!Array.isArray(intent) || intent.length !== 3 || !intent.every((v) => typeof v === 'string') || !r || typeof r.id !== 'string' || r.id.length < 16 || r.id.length > 80 || typeof r.done !== 'boolean') continue;
+      submissions[key] = { id: r.id, account: '', target: intent[0], directory: intent[1], url: intent[2], mode: 'legacy', version: '', indices: [], state: r.done ? 'confirmed' : 'unknown' };
+    }
+  }
+} catch { storageAvailable = false; }
 function rememberSubmissions() {
-  // 保留已有编号，容量不足时在提交入口拒绝新增，不能淘汰未知结果。
-  try { sessionStorage.setItem('xlp-remote-submissions', JSON.stringify(submissions)); } catch { /* 存储满时仍可在本页检查提交结果。 */ }
+  try { sessionStorage.setItem('xlp-remote-submissions', JSON.stringify({ version: 2, records: submissions, drafts })); }
+  catch { storageAvailable = false; }
+}
+function rememberDrafts() {
+  drafts = entries.filter((e) => !e.record && !e.skip).slice(0, 50).map((e) => ({ url: e.raw, account: status.username || '', target: status.target || '', version: e.preview?.resource_version || e.restore?.version || '', indices: (e.preview ? [...e.selected] : e.restore?.indices || []).filter((n) => n >= 0) }));
+  rememberSubmissions();
 }
 function notice(message, success = false) {
   clearTimeout(noticeTimer);
@@ -36,7 +58,7 @@ async function api(path, method = 'GET', body, signal) {
   try { data = await response.json(); } catch { data = {}; }
   if (!response.ok) {
     const error = new Error(data.message || (response.status === 401 ? '面板认证已失效，请刷新页面重新认证' : '请求失败，请稍后重试'));
-    error.code = data.code || 'network'; throw error;
+    error.code = data.code || 'network'; error.remoteCode = data.remote_code || 0; throw error;
   }
   return data;
 }
@@ -88,8 +110,10 @@ async function loadStatus() {
     generation++; tasks = []; nextPage = ''; pagesLoaded = 0;
     cancelTaskRefresh(); resetFolders(); $('folder-dialog').close();
     cancelQuery('devices'); $('device-dialog').close();
+    invalidateCreate();
   }
-  if (previous.username && previous.username !== status.username) { submissions = {}; rememberSubmissions(); }
+  for (const r of Object.values(submissions)) if (!r.account) r.account = status.username || '';
+  renderHistory();
   $('account-name').textContent = status.logged_in ? status.username : '未登录迅雷账号';
   $('account-button').textContent = status.logged_in ? '退出授权' : '登录迅雷';
   $('device-name').textContent = status.target_name || '请选择下载设备';
@@ -370,6 +394,9 @@ function openCreate() {
   $('create-device').textContent = status.target_name;
   $('create-directory').value = status.directory || '';
   $('create-message').textContent = ''; showDialog('create-dialog');
+  createEpoch++;
+  if (!$('links').value) $('links').value = drafts.filter((d) => d.account === status.username && d.target === status.target).map((d) => d.url).join('\n');
+  syncEntries(); renderHistory();
 }
 ['new-button', 'empty-button'].forEach((id) => $(id).addEventListener('click', openCreate));
 $('panel-back').addEventListener('click', () => {
@@ -394,41 +421,201 @@ function requestID() {
   const bytes = new Uint8Array(16); crypto.getRandomValues(bytes);
   return Array.from(bytes, (value) => value.toString(16).padStart(2, '0')).join('');
 }
-$('create-form').addEventListener('submit', async (event) => {
-  event.preventDefault(); if (creating) return;
-  const links = [...new Set($('links').value.split(/\r?\n/).map((line) => line.trim()).filter(Boolean))];
-  const directory = $('create-directory').value, target = status.target;
-  if (!links.length || links.length > 50) { $('create-message').textContent = '每批请输入 1 至 50 条链接，每行一条'; return; }
-  if (!directory) { $('create-message').textContent = '请先选择设备上的下载目录'; return; }
-  creating = true; $('create-results').replaceChildren(); $('create-message').textContent = '正在逐条提交，请保持页面打开…';
-  $('create-form').querySelectorAll('button, textarea, input').forEach((node) => { node.disabled = true; });
-  let completed = 0;
-  for (const link of links) {
-    const key = JSON.stringify([target, directory, link]);
-    let record = submissions[key];
-    const row = element('div', 'result'), result = element('span', '', '正在提交…');
-    const label = element('span', '', link); label.title = link; row.append(label, result); $('create-results').append(row);
-    try {
-      if (!record) {
-        if (Object.keys(submissions).length >= maxSubmissions) throw new Error('提交记录已达上限，请先检查未完成项，关闭窗口清理已提交记录后再添加新链接。');
-        record = { id: requestID(), done: false };
-        submissions[key] = record; rememberSubmissions();
-      }
-      if (!record.done) await api('/tasks', 'POST', { request_id: record.id, target, directory, url: link });
-      record.done = true; completed++; result.textContent = '已提交'; result.className = 'ok';
-    } catch (error) { result.textContent = error.message; result.className = 'error'; }
-    rememberSubmissions();
+function cancelResolve() {
+  createEpoch++; cancelQuery('resolve'); resolving = false;
+  for (const e of entries) { e.controller?.abort(); if (e.state === 'resolving') e.state = 'input'; }
+  renderCreate();
+}
+function invalidateCreate() {
+  cancelResolve(); entries = []; $('create-results').replaceChildren();
+  $('create-submit').disabled = true;
+  if ($('create-dialog').open && !creating) $('create-dialog').close();
+}
+function syncEntries() {
+  const links = [...new Set($('links').value.split(/\r?\n/).map((s) => s.trim()).filter(Boolean))];
+  const old = new Map(entries.map((e) => [e.raw, e]));
+  for (const e of entries) if (!links.includes(e.raw)) e.controller?.abort();
+  entries = links.slice(0, 50).map((raw) => old.get(raw) || { raw, epoch: 0, state: 'input', selected: new Set(), skip: false, restore: drafts.find((d) => d.url === raw && d.account === status.username && d.target === status.target) });
+  renderCreate(); rememberDrafts();
+  return links.length > 0 && links.length <= 50;
+}
+function canSubmit(e) {
+  return !e.skip && e.state === 'ready' && !e.record && e.preview?.complete === true && Date.parse(e.preview.expires_at) > Date.now() && e.selected.size > 0;
+}
+function directoryIntent(directory) {
+  return '/' + directory.split('/').filter((segment) => segment !== '' && segment !== '.').join('/');
+}
+function summaryCreate() {
+  const selected = entries.filter(canSubmit);
+  let bytes = 0n, count = 0;
+  for (const e of selected) for (const f of e.preview.files) if (!f.is_dir && e.selected.has(f.index ?? -1)) { bytes += BigInt(f.size); count++; }
+  $('selection-summary').textContent = '将提交 ' + selected.length + ' 条，跳过 ' + (entries.length - selected.length) + ' 条；已选 ' + count + ' 个文件，共 ' + sizeText(Number(bytes)) + '。' + (!storageAvailable ? '浏览器存储不可用，刷新后无法保证恢复提交编号。' : '');
+  $('create-submit').disabled = creating || resolving || !selected.length;
+}
+function renderHistory() {
+  $('submission-history').replaceChildren();
+  for (const r of Object.values(submissions)) {
+    if (r.account !== status.username || r.target !== status.target) continue;
+    const row = element('div', 'history-row');
+    row.append(element('div', '', r.url + ' · ' + r.directory), element('span', '', r.state === 'confirmed' ? '已提交' : r.state === 'missing' ? '本地记录已缺失，请在设备中核对，不能自动重发' : '提交结果未知，请检查原提交'));
+    if (r.state !== 'confirmed') {
+      const button = element('button', '', '检查提交结果'); button.type = 'button';
+      button.addEventListener('click', () => checkRecord(r, button)); row.append(button);
+    }
+    $('submission-history').append(row);
   }
-  creating = false; $('create-form').querySelectorAll('button, textarea, input').forEach((node) => { node.disabled = false; });
-  $('create-message').textContent = '已提交 ' + completed + ' / ' + links.length + ' 条。' + (completed < links.length ? '可再次点击检查或重试未完成项；已提交项不会重复创建。' : '可关闭此窗口查看下载进度。');
-  $('create-submit').textContent = completed < links.length ? '检查或重试未完成项' : '立即下载';
+}
+async function checkRecord(r, button) {
+  if (button.disabled || creating) return;
+  button.disabled = true; const token = generation;
+  try {
+    const result = await api('/submissions/' + encodeURIComponent(r.id) + '?target=' + encodeURIComponent(r.target));
+    if (['confirmed', 'unknown', 'missing'].includes(result.status)) { r.state = result.status; r.task_id = result.task_id || ''; rememberSubmissions(); }
+    if (token === generation) { renderHistory(); renderCreate(); }
+  } catch (error) { if (token === generation) $('create-message').textContent = error.message; }
+  finally { button.disabled = false; }
+}
+function renderCreate() {
+  const focusKey = document.activeElement?.dataset?.focusKey, scroll = $('create-results').scrollTop;
+  let focusNode;
+  function focusable(node, key) { node.dataset.focusKey = JSON.stringify(key); if (node.dataset.focusKey === focusKey) focusNode = node; return node; }
+  for (const e of entries) e.treeScroll = e.tree?.scrollTop || 0;
+  $('create-results').replaceChildren();
+  $('resolve-links').disabled = creating || resolving;
+  $('cancel-resolve').hidden = !resolving;
+  for (const e of entries) {
+    if (e.record?.state === 'confirmed') { e.state = 'confirmed'; e.message = '已提交'; }
+    const card = element('section', 'resource-card'), input = focusable(element('input'), [e.raw, 'link']); input.value = e.raw; input.disabled = creating; input.setAttribute('aria-label', '编辑下载链接');
+    input.addEventListener('input', () => {
+      e.controller?.abort(); e.epoch++; e.raw = input.value.trim(); e.preview = null; e.selected.clear(); e.restore = null; e.record = null; e.state = 'input';
+      $('links').value = entries.map((item) => item.raw).join('\n'); summaryCreate(); rememberDrafts();
+    });
+    input.addEventListener('change', renderCreate); card.append(input);
+    const messages = { input: '尚未解析', resolving: '正在解析文件列表…', ready: '请选择需要下载的文件', resolve_failed: '解析失败', expired: '预览已过期，请重新解析', submitting: '正在提交，请保持页面打开', confirmed: '已提交', unknown: '结果未知，请检查原提交', rejected: '未创建，请修正后重试' };
+    card.append(element('p', 'resource-status', e.message || messages[e.state] || ''));
+    const tools = element('div', 'resource-tools');
+    const skip = focusable(element('button', '', e.skip ? '恢复此条' : '跳过此条'), [e.raw, 'skip']); skip.type = 'button'; skip.disabled = creating;
+    skip.addEventListener('click', () => { e.skip = !e.skip; renderCreate(); rememberDrafts(); }); tools.append(skip);
+    if (e.preview) {
+      card.append(element('h2', '', e.preview.name));
+      const leaves = e.preview.files.filter((f) => !f.is_dir);
+      for (const [label, predicate] of [['全选', () => true], ['取消全选', () => false], ['仅选视频', (f) => /\.(mp4|mkv|avi|mov|wmv|flv|webm|m4v|ts|m2ts|rmvb|rm|mpeg|mpg)$/i.test(f.name)]]) {
+        const button = focusable(element('button', '', label), [e.raw, label]); button.type = 'button'; button.disabled = creating || !!e.record;
+        button.addEventListener('click', () => { e.selected = new Set(leaves.filter(predicate).map((f) => f.index ?? -1)); renderCreate(); rememberDrafts(); }); tools.append(button);
+      }
+      const sort = focusable(element('select'), [e.raw, 'sort']); sort.setAttribute('aria-label', '文件排序'); sort.append(new Option('按名称排序', 'name'), new Option('按大小排序', 'size')); sort.value = e.sort || 'name'; sort.disabled = creating;
+      sort.addEventListener('change', () => { e.sort = sort.value; renderCreate(); }); tools.append(sort);
+      card.append(tools);
+      const tree = element('div', 'file-tree'), children = new Map();
+      for (const f of e.preview.files) { if (!children.has(f.parent_id)) children.set(f.parent_id, []); children.get(f.parent_id).push(f); }
+      function descendants(f) { return f.is_dir ? (children.get(f.id) || []).flatMap(descendants) : [f]; }
+      function draw(parent, container) {
+        const list = [...(children.get(parent) || [])];
+        list.sort((a, b) => e.sort === 'size' ? (BigInt(a.size) < BigInt(b.size) ? 1 : BigInt(a.size) > BigInt(b.size) ? -1 : a.name.localeCompare(b.name)) : a.name.localeCompare(b.name));
+        for (const f of list) {
+          const row = element('label', 'file-row'), checkbox = focusable(element('input'), [e.raw, 'file', f.id]); checkbox.type = 'checkbox';
+          const files = descendants(f), checked = files.filter((n) => e.selected.has(n.index ?? -1)).length;
+          checkbox.checked = !!files.length && checked === files.length; checkbox.indeterminate = checked > 0 && checked < files.length;
+          checkbox.disabled = creating || e.skip || !!e.record || !files.length; checkbox.setAttribute('aria-label', f.name);
+          checkbox.addEventListener('change', () => { for (const n of files) { if (checkbox.checked) e.selected.add(n.index ?? -1); else e.selected.delete(n.index ?? -1); } renderCreate(); rememberDrafts(); });
+          row.append(checkbox, element('span', 'file-name', (f.is_dir ? '📁 ' : '') + f.name), element('span', 'file-size', sizeText(Number(f.size)))); container.append(row);
+          if (f.is_dir) { const nested = element('div', 'file-children'); container.append(nested); draw(f.id, nested); }
+        }
+      }
+      draw('', tree); card.append(tree); e.tree = tree;
+      let size = 0n; for (const f of leaves) if (e.selected.has(f.index ?? -1)) size += BigInt(f.size);
+      card.append(element('p', 'resource-status', '已选 ' + e.selected.size + ' / ' + leaves.length + ' 个文件，共 ' + sizeText(Number(size))));
+    } else card.append(tools);
+    $('create-results').append(card);
+    if (e.tree) e.tree.scrollTop = e.treeScroll;
+  }
+  $('create-results').scrollTop = scroll;
+  focusNode?.focus?.({ preventScroll: true });
+  summaryCreate();
+}
+$('links').addEventListener('input', () => { if (!creating) syncEntries(); });
+$('cancel-resolve').addEventListener('click', cancelResolve);
+$('resolve-links').addEventListener('click', async () => {
+  if (creating || resolving) return;
+  if (!syncEntries()) { $('create-message').textContent = '每批请输入 1 至 50 条链接，每行一条'; return; }
+  const token = ++createEpoch, session = generation, target = status.target;
+  resolving = true; renderCreate();
+  for (const e of [...entries]) {
+    if (token !== createEpoch || session !== generation || !$('create-dialog').open) break;
+    if (e.skip || e.record || canSubmit(e) || e.state === 'confirmed' || e.state === 'unknown') continue;
+    const epoch = ++e.epoch, controller = new AbortController(); e.controller = controller;
+    const valid = () => token === createEpoch && session === generation && e.epoch === epoch && entries.includes(e) && $('create-dialog').open;
+    const restore = e.preview ? { version: e.preview.resource_version, indices: [...e.selected] } : e.restore;
+    e.state = 'resolving'; e.message = ''; renderCreate();
+    try {
+      const p = await api('/resources/resolve', 'POST', { target, url: e.raw }, controller.signal);
+      if (!valid()) continue;
+      if (p.complete !== true || !['files', 'single'].includes(p.kind) || !Array.isArray(p.files)) throw new Error('资源列表不完整，不能创建任务');
+      e.preview = p; e.selected = new Set(); e.state = 'ready';
+      if (restore?.version === p.resource_version) {
+        const available = new Set(p.files.filter((f) => !f.is_dir).map((f) => f.index ?? -1));
+        e.selected = new Set(restore.indices.filter((n) => available.has(n)));
+      } else if (restore?.version) e.message = '资源内容已变化，已清空旧选择，请重新确认';
+      if (p.kind === 'single') e.selected.add(-1);
+      e.restore = null;
+    } catch (error) { if (valid()) { e.state = 'resolve_failed'; e.preview = null; e.message = error.message; } }
+    finally { if (valid()) { renderCreate(); rememberDrafts(); } }
+  }
+  if (token === createEpoch && session === generation) { resolving = false; renderCreate(); }
+});
+$('create-form').addEventListener('submit', async (event) => {
+  event.preventDefault(); if (creating || resolving) return;
+  if (!syncEntries()) { $('create-message').textContent = '每批请输入 1 至 50 条链接，每行一条'; return; }
+  const chosen = entries.filter(canSubmit), directory = $('create-directory').value, target = status.target, account = status.username;
+  if (!directory) { $('create-message').textContent = '请先选择设备上的下载目录'; return; }
+  if (!chosen.length) { $('create-message').textContent = '请先解析链接并选择文件；预览过期后需要重新解析'; return; }
+  creating = true; const session = generation, token = createEpoch;
+  $('links').disabled = true; $('create-browse').disabled = true;
+  let completed = 0;
+  for (const e of chosen) {
+    if (session !== generation || token !== createEpoch) break;
+    const p = e.preview, indices = [...e.selected].filter((n) => n >= 0).sort((a,b) => a-b);
+    const key = JSON.stringify([account, target, directoryIntent(directory), p.url, p.kind, p.resource_version, indices]);
+    let r = submissions[key];
+    // 旧提交或历史未知结果可能没有内容版本，必须先核对，不能为同一链接自动分配新编号。
+    const historical = Object.values(submissions).find((v) => v.account === account && v.target === target && directoryIntent(v.directory) === directoryIntent(directory) && (v.url === p.url || v.mode === 'legacy' && v.url === e.raw) && (v.state !== 'confirmed' || v.mode === 'legacy') && (v.mode === 'legacy' || v.mode === p.kind && v.version === p.resource_version && JSON.stringify(v.indices) === JSON.stringify(indices)));
+    if (r || historical) { e.record = r || historical; e.state = e.record.state === 'confirmed' ? 'confirmed' : 'unknown'; e.message = '已有提交记录，请使用下方“检查提交结果”'; renderCreate(); continue; }
+    if (Object.keys(submissions).length >= maxSubmissions) { e.message = '提交记录已达上限，请先核对未知结果，关闭窗口清理成功项'; renderCreate(); continue; }
+    r = { id: requestID(), account, target, directory, url: p.url, mode: p.kind, version: p.resource_version, indices, state: 'unknown' };
+    submissions[key] = r; e.record = r; e.state = 'submitting'; rememberDrafts(); renderCreate(); renderHistory();
+    try {
+      const result = await api('/tasks', 'POST', { request_id: r.id, target, directory, url: p.url, preview_id: p.preview_id, resource_version: p.resource_version, selection_mode: p.kind, file_indices: indices });
+      if (!result.id) throw Object.assign(new Error('未收到任务编号，请检查原提交'), { code: 'submission_unknown' });
+      r.state = 'confirmed'; r.task_id = result.id; completed++;
+      if (session === generation && token === createEpoch) { e.state = 'confirmed'; e.message = '已提交'; }
+    } catch (error) {
+      const rejected = ['invalid_request', 'invalid_selection', 'selection_required', 'directory_required', 'device_required', 'settings_changed', 'preview_expired', 'preview_mismatch', 'rate_limited', 'resource_unavailable', 'resource_incomplete', 'resource_too_large', 'login_required', 'captcha_required', 'review_required', 'verification_required'].includes(error.code) || error.code === 'upstream' && error.remoteCode;
+      if (rejected) { delete submissions[key]; e.record = null; }
+      if (session === generation && token === createEpoch) { e.state = rejected ? (error.code === 'preview_expired' ? 'expired' : 'ready') : 'unknown'; e.message = error.message; }
+    }
+    rememberSubmissions();
+    if (session === generation && token === createEpoch) { renderCreate(); renderHistory(); }
+  }
+  creating = false; $('links').disabled = false; $('create-browse').disabled = false;
+  if (session === generation && token === createEpoch) {
+    $('create-message').textContent = '已提交 ' + completed + ' / ' + chosen.length + ' 条，跳过 ' + (entries.length - chosen.length) + ' 条。未知结果只可检查原提交。';
+    renderCreate(); renderHistory(); rememberDrafts();
+  }
   await refreshTasks();
 });
 $('create-dialog').addEventListener('close', () => {
-  // 保留结果未知的请求编号，重新打开窗口也不会意外重复下发。
-  Object.keys(submissions).forEach((key) => { if (submissions[key].done) delete submissions[key]; });
-  rememberSubmissions(); $('create-results').replaceChildren(); $('create-submit').textContent = '立即下载';
+  if ($('create-dialog').open) return;
+  cancelResolve();
+  Object.keys(submissions).forEach((key) => { if (submissions[key].state === 'confirmed') delete submissions[key]; });
+  entries = entries.filter((e) => !e.record); $('links').value = entries.map((e) => e.raw).join('\n');
+  rememberDrafts(); $('create-results').replaceChildren();
 });
+setInterval(() => {
+  if (!$('create-dialog').open || creating || resolving) return;
+  let changed = false;
+  for (const e of entries) if (e.state === 'ready' && e.preview && Date.parse(e.preview.expires_at) <= Date.now()) { e.state = 'expired'; e.message = '预览已过期，请重新解析'; changed = true; }
+  if (changed) renderCreate();
+}, 1000);
 
 (async () => {
   try {

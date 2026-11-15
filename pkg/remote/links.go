@@ -10,6 +10,10 @@ import (
 var btihPattern = regexp.MustCompile(`(?i)^urn:btih:([a-f0-9]{40}|[a-z2-7]{32})$`)
 var btmhPattern = regexp.MustCompile(`(?i)^urn:btmh:1220[a-f0-9]{64}$`)
 
+func isMagnetLink(link string) bool {
+	return len(link) >= 7 && strings.EqualFold(link[:7], "magnet:")
+}
+
 func NormalizeLink(link string) (string, error) {
 	link = strings.TrimSpace(link)
 	if len(link) == 0 || len(link) > 16384 || strings.ContainsAny(link, "\r\n\x00") {

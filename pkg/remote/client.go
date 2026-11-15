@@ -46,6 +46,9 @@ type Client struct {
 	files                          stateFiles
 	http                           *http.Client
 	relays                         map[string]relay
+	previews                       map[string]*resourceSnapshot
+	previewBytes                   int
+	resourceSession                uint64
 	clientID, clientSecret, appKey string
 }
 
@@ -72,6 +75,7 @@ func (c *Client) Close() {
 	c.gate <- struct{}{}
 	defer c.unlock()
 	c.closed = true
+	c.clearPreviews()
 	c.http.CloseIdleConnections()
 }
 func (c *Client) lock(ctx context.Context) error {
@@ -181,6 +185,13 @@ func businessError(d object) error {
 }
 
 func (c *Client) raw(ctx context.Context, method, endpoint string, query url.Values, body any, headers http.Header) (object, error) {
+	budget, _ := ctx.Value(resourceBudgetKey{}).(*resourceBudget)
+	if budget != nil {
+		if budget.requests >= maxResourceRequests {
+			return nil, resourceTooLarge()
+		}
+		budget.requests++
+	}
 	u, err := url.Parse(endpoint)
 	if err != nil {
 		return nil, failure("upstream", "迅雷接口地址无效")
@@ -217,18 +228,31 @@ func (c *Client) raw(ctx context.Context, method, endpoint string, query url.Val
 	if resp.StatusCode == http.StatusNoContent && (method == http.MethodDelete || method == http.MethodPatch) {
 		return object{}, nil
 	}
-	b, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20+1))
+	readLimit := int64(8 << 20)
+	if budget != nil {
+		readLimit = min(readLimit, int64(maxResourceBytes-budget.bytes))
+	}
+	b, err := io.ReadAll(io.LimitReader(resp.Body, readLimit+1))
 	if err != nil {
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
 		}
 		return nil, failure("network", "读取迅雷响应失败，请稍后重试")
 	}
-	if len(b) > 8<<20 {
+	if int64(len(b)) > readLimit {
+		if budget != nil {
+			return nil, resourceTooLarge()
+		}
 		if resp.StatusCode == http.StatusUnauthorized {
 			return nil, failure("login_required", "迅雷登录已失效，请重新登录")
 		}
 		return nil, failure("upstream", "迅雷响应过大，已停止读取")
+	}
+	if budget != nil {
+		budget.bytes += len(b)
+		if budget.bytes > maxResourceBytes {
+			return nil, resourceTooLarge()
+		}
 	}
 	var d object
 	dec := json.NewDecoder(bytes.NewReader(b))

@@ -304,84 +304,195 @@ test('分页中途失败保留原任务并允许后续刷新', async () => {
 
 const submissionStorageKey = 'xlp-remote-submissions';
 const submissionLinks = (count, offset = 0) => Array.from({ length: count }, (_, index) => 'https://files.example.test/下载-' + (index + offset));
-const unknownSubmission = (request) => request.respond({ code: 'submission_unknown', message: '此前提交结果仍未确认，请检查原提交' }, 409);
-
-async function submitLinks(app, links, respond = unknownSubmission) {
-  app.node('links').value = links.join('\n');
+const magnet = 'magnet:?xt=urn:btih:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+function preview(url = magnet, version = '相同内容', kind = 'files') {
+  const files = kind === 'single' ? [{ id: '单文件', parent_id: '', name: '唯一.mp4', is_dir: false, size: '100' }] : [
+    { id: '根', parent_id: '', name: '资料包', is_dir: true, size: '1000' },
+    { id: '零', parent_id: '根', name: '影片.mp4', is_dir: false, index: 0, size: '100' },
+    { id: '子目录', parent_id: '根', name: '子目录', is_dir: true, size: '500' },
+    { id: '二', parent_id: '子目录', name: '剧集.mkv', is_dir: false, index: 2, size: '200' },
+    { id: '三', parent_id: '子目录', name: '字幕.srt', is_dir: false, index: 3, size: '300' },
+    { id: '五', parent_id: '根', name: '说明.txt', is_dir: false, index: 5, size: '400' },
+    { id: '空', parent_id: '根', name: '空目录', is_dir: true, size: '0' },
+  ];
+  return { preview_id: '预览编号', resource_version: version, target: account().target, url, kind, name: '资料包', complete: true, total_file_count: kind === 'single' ? 1 : 4, total_size: kind === 'single' ? '100' : '1000', expires_at: new Date(Date.now() + 600000).toISOString(), files };
+}
+const descendants = (node) => node.children.flatMap((n) => [n, ...descendants(n)]);
+const checkbox = (app, name) => descendants(app.node('create-results')).find((n) => n.type === 'checkbox' && n.attributes.get('aria-label') === name);
+const tool = (app, label) => descendants(app.node('create-results')).find((n) => n.tagName === 'BUTTON' && n.textContent === label);
+const records = (app) => JSON.parse(app.run('JSON.stringify(Object.values(submissions))'));
+async function parseLinks(app, links, response = (url) => preview(url, '相同内容', 'single')) {
+  app.node('links').value = links.join('\n'); await app.node('links').emit('input');
+  const pending = app.node('resolve-links').emit('click');
+  for (;;) {
+    await settle();
+    const r = app.requests.find((r) => !r.taken && r.url.pathname === '/api/remote/resources/resolve');
+    if (!r) break;
+    const request = app.take('/resources/resolve'), result = response(JSON.parse(request.body).url);
+    request.respond(result, result.code ? 422 : 200);
+  }
+  await pending;
+}
+async function submitChosen(app, response = { code: 'submission_unknown', message: '结果未知' }) {
   const pending = app.node('create-form').emit('submit'), submitted = [];
   for (;;) {
     await settle();
-    if (!app.requests.some((request) => !request.taken && request.url.pathname === '/api/remote/tasks')) break;
+    if (!app.requests.some((r) => !r.taken && r.url.pathname === '/api/remote/tasks')) break;
     const request = app.take('/tasks');
     if (request.method === 'GET') request.respond(taskPage());
-    else { submitted.push(JSON.parse(request.body)); respond(request); }
+    else { submitted.push(JSON.parse(request.body)); request.respond(response, response.code ? 409 : 200); }
   }
-  await pending;
-  return submitted;
+  await pending; return submitted;
+}
+async function checkOriginal(app, id, result = { status: 'unknown' }) {
+  const pending = app.run('checkRecord(Object.values(submissions).find((r) => r.id === ' + JSON.stringify(id) + '), document.createElement("button"))');
+  const request = app.take('/submissions/' + id); assert.equal(request.method, 'GET'); request.respond(result); await pending;
 }
 
-test('连续提交超过一百条未知结果后关闭重开仍沿用最早编号', async () => {
-  const app = await createApp(), links = submissionLinks(150);
-  let first;
-  for (let offset = 0; offset < links.length; offset += 50) {
-    app.run('openCreate()');
-    const requests = await submitLinks(app, links.slice(offset, offset + 50));
-    if (!offset) first = requests[0];
-    app.node('create-dialog').close(); await app.node('create-dialog').closed;
-  }
-  app.run('openCreate()');
-  const retried = await submitLinks(app, [links[0]]);
-  assert.equal(retried.length, 1);
-  assert.equal(retried[0].request_id, first.request_id, '未知提交必须保留原编号，不能改用新编号自动重发');
+test('解析完整文件树和零选择都不会创建任务', async () => {
+  const app = await createApp(); app.run('openCreate()');
+  await parseLinks(app, [magnet], () => preview());
+  assert.equal(app.requests.filter((r) => r.method === 'POST' && r.url.pathname.endsWith('/tasks')).length, 0);
+  assert.equal(checkbox(app, '影片.mp4').checked, false, '磁力不得默认全选');
+  assert.equal(checkbox(app, '空目录').disabled, true);
+  assert.equal((await submitChosen(app)).length, 0);
+  assert.match(app.node('selection-summary').textContent, /将提交 0 条/);
 });
 
-test('提交记录满额时拒绝新链接但仍检查已有编号', async () => {
-  const storage = new Map(), app = await createApp({ storage }), links = submissionLinks(100);
-  app.run('openCreate()');
-  const first = await submitLinks(app, links.slice(0, 50));
-  await submitLinks(app, links.slice(50));
-  const before = storage.get(submissionStorageKey);
-  const retried = await submitLinks(app, [submissionLinks(1, 100)[0], links[0]]);
-  assert.equal(retried.length, 1, '容量不足时不得向接口发送新编号');
-  assert.equal(retried[0].request_id, first[0].request_id);
-  assert.equal(storage.get(submissionStorageKey), before, '拒绝新提交不得改变未知记录');
-  assert.match(app.node('create-results').children[0].children[1].textContent, /已满|上限/);
-  assert.match(app.node('create-results').children[0].children[1].textContent, /检查|核对/);
+test('目录三态和视频选择只影响真实叶子索引', async () => {
+  const app = await createApp(); app.run('openCreate()'); await parseLinks(app, [magnet], () => preview());
+  let box = checkbox(app, '影片.mp4'); box.checked = true; await box.emit('change');
+  assert.equal(checkbox(app, '资料包').indeterminate, true);
+  box = checkbox(app, '子目录'); box.checked = true; await box.emit('change');
+  assert.equal(checkbox(app, '子目录').checked, true);
+  await tool(app, '取消全选').emit('click'); assert.equal(checkbox(app, '资料包').checked, false);
+  await tool(app, '全选').emit('click'); assert.equal(checkbox(app, '资料包').checked, true);
+  await tool(app, '仅选视频').emit('click');
+  assert.equal(checkbox(app, '字幕.srt').checked, false);
+  const sort = descendants(app.node('create-results')).find((n) => n.tagName === 'SELECT'); sort.value = 'size'; await sort.emit('change');
+  const requests = await submitChosen(app, { id: '已创建任务' });
+  assert.deepEqual(requests[0].file_indices, [0, 2]); assert.equal(requests[0].url, magnet);
+  assert.equal(requests[0].directory, account().directory); assert.equal(requests[0].selection_mode, 'files');
 });
 
-test('恢复超过一百条旧未知记录时全部保留且拒绝继续新增', async () => {
-  const links = submissionLinks(150), status = account();
-  const records = Object.fromEntries(links.map((link, index) => [JSON.stringify([status.target, status.directory, link]), { id: index.toString(16).padStart(32, '0'), done: false }]));
-  const saved = JSON.stringify(records), storage = new Map([[submissionStorageKey, saved]]);
-  const app = await createApp({ storage });
-  app.run('openCreate()');
-  const retried = await submitLinks(app, [links[0]]);
-  assert.equal(retried[0].request_id, Object.values(records)[0].id);
-  assert.equal(storage.get(submissionStorageKey), saved, '保存时不得截断已有的超限未知记录');
-  assert.equal((await submitLinks(app, submissionLinks(1, 150))).length, 0);
-  app.node('create-dialog').close(); await app.node('create-dialog').closed;
-  const reloaded = await createApp({ storage });
-  reloaded.run('openCreate()');
-  const again = await submitLinks(reloaded, [links[0], links[149]]);
-  assert.deepEqual(again.map((request) => request.request_id), [Object.values(records)[0].id, Object.values(records)[149].id]);
-  assert.equal(storage.get(submissionStorageKey), saved);
+test('批量解析部分失败时成功项选择保持并显示跳过数量', async () => {
+  const app = await createApp(); app.run('openCreate()');
+  await parseLinks(app, [magnet], () => preview()); await tool(app, '仅选视频').emit('click');
+  await parseLinks(app, [magnet, 'https://example.test/失败'], () => ({ code: 'resource_unavailable', message: '解析失败' }));
+  assert.equal(checkbox(app, '影片.mp4').checked, true);
+  assert.match(app.node('selection-summary').textContent, /将提交 1 条，跳过 1 条/);
+  const requests = await submitChosen(app, { id: '任务' }); assert.equal(requests.length, 1);
+  assert.match(app.node('create-message').textContent, /跳过 1 条/);
 });
 
-test('满额后确认成功的记录在当前窗口复用并在关闭后释放容量', async () => {
-  const storage = new Map(), app = await createApp({ storage }), links = submissionLinks(100);
-  app.run('openCreate()');
-  const first = await submitLinks(app, links.slice(0, 50));
-  await submitLinks(app, links.slice(50));
-  const confirmed = await submitLinks(app, [links[0]], (request) => request.respond({}));
-  assert.equal(confirmed[0].request_id, first[0].request_id);
-  assert.equal((await submitLinks(app, [links[0]])).length, 0, '当前窗口内成功项不得重复发送');
-  const next = submissionLinks(1, 100);
-  assert.equal((await submitLinks(app, next)).length, 0, '关闭窗口前仍保留成功项的去重记录');
-  app.node('create-dialog').close(); await app.node('create-dialog').closed;
-  assert.equal(Object.keys(JSON.parse(storage.get(submissionStorageKey))).length, 99);
-  app.run('openCreate()');
-  assert.equal((await submitLinks(app, next)).length, 1);
-  assert.equal(Object.keys(JSON.parse(storage.get(submissionStorageKey))).length, 100);
-  const retried = await submitLinks(app, [links[1]]);
-  assert.equal(retried[0].request_id, first[1].request_id, '释放成功记录不得影响其他未知编号');
+for (const outcome of ['成功', '错误']) test('取消并关闭重开忽略旧解析' + outcome + '及收尾', async () => {
+  const app = await createApp(); app.run('openCreate()'); app.node('links').value = magnet;
+  const old = app.node('resolve-links').emit('click'), request = app.take('/resources/resolve');
+  app.node('create-dialog').close(); await app.node('create-dialog').closed; assert.equal(request.signal.aborted, true);
+  app.run('openCreate()'); const current = app.node('resolve-links').emit('click'), latest = app.take('/resources/resolve');
+  if (outcome === '成功') request.respond(preview()); else request.fail(); await old;
+  assert.equal(app.node('resolve-links').disabled, true);
+  latest.respond(preview()); await current;
+  assert.equal(app.node('resolve-links').disabled, false); assert.ok(checkbox(app, '影片.mp4'));
+  assert.equal(records(app).length, 0);
+});
+
+test('编辑单条链接和设备切换使旧解析失效', async () => {
+  const app = await createApp(); app.run('openCreate()');
+  await parseLinks(app, [magnet], () => preview()); await tool(app, '仅选视频').emit('click');
+  app.node('links').value += '\nhttps://example.test/旧'; await app.node('links').emit('input');
+  const pending = app.node('resolve-links').emit('click'), old = app.take('/resources/resolve');
+  const input = app.node('create-results').children[1].children[0]; input.value = 'https://example.test/新'; await input.emit('input');
+  old.respond(preview('https://example.test/旧')); await pending;
+  assert.equal(checkbox(app, '影片.mp4').checked, true);
+  const next = app.node('resolve-links').emit('click'), late = app.take('/resources/resolve');
+  await app.status(account('设备乙')); late.respond(preview()); await next;
+  assert.equal(app.node('create-dialog').open, false); assert.equal(app.node('create-results').children.length, 0);
+});
+
+test('创建按钮连点只下发一次且选择被冻结', async () => {
+  const app = await createApp(); app.run('openCreate()'); await parseLinks(app, [magnet], () => preview()); await tool(app, '仅选视频').emit('click');
+  const pending = app.node('create-form').emit('submit'), request = app.take('/tasks');
+  assert.equal(checkbox(app, '影片.mp4').disabled, true);
+  await app.node('create-form').emit('submit');
+  assert.equal(app.requests.filter((r) => r.method === 'POST' && r.url.pathname.endsWith('/tasks')).length, 1);
+  let blocked = false; await app.node('create-dialog').emit('cancel', { preventDefault() { blocked = true; } }); assert.equal(blocked, true);
+  request.fail(); await settle(); app.take('/tasks').respond(taskPage()); await pending;
+  assert.equal(records(app)[0].state, 'unknown');
+});
+
+test('刷新未知项后只检查原编号，记录缺失也不能自动重发', async () => {
+  const storage = new Map(), app = await createApp({ storage }); app.run('openCreate()');
+  await parseLinks(app, [magnet], () => preview()); await tool(app, '仅选视频').emit('click');
+  const sent = await submitChosen(app); app.node('create-dialog').close(); await app.node('create-dialog').closed;
+  const restored = await createApp({ storage }); restored.run('openCreate()');
+  await checkOriginal(restored, sent[0].request_id, { status: 'missing' });
+  assert.equal(records(restored)[0].state, 'missing');
+  await parseLinks(restored, [magnet], () => preview()); await tool(restored, '仅选视频').emit('click');
+  assert.equal((await submitChosen(restored)).length, 0);
+  assert.equal(restored.requests.filter((r) => r.method === 'POST' && r.url.pathname.endsWith('/tasks')).length, 0);
+});
+
+test('旧存储迁移保留超量未知编号且只核对', async () => {
+  const links = submissionLinks(150), state = account();
+  const old = Object.fromEntries(links.map((link, index) => [JSON.stringify([state.target, state.directory, link]), { id: index.toString(16).padStart(32, '0'), done: false }]));
+  const storage = new Map([[submissionStorageKey, JSON.stringify(old)]]), app = await createApp({ storage }); app.run('openCreate()');
+  assert.equal(records(app).length, 150);
+  await checkOriginal(app, Object.values(old)[149].id); assert.equal(records(app).length, 150);
+  await parseLinks(app, [submissionLinks(1, 150)[0]]); assert.equal((await submitChosen(app)).length, 0);
+  const migrated = JSON.parse(storage.get(submissionStorageKey)); assert.equal(migrated.version, 2); assert.equal(Object.keys(migrated.records).length, 150);
+  assert.equal(app.requests.filter((r) => r.method === 'POST' && r.url.pathname.endsWith('/tasks')).length, 0);
+});
+
+test('一百条未知记录容量满仍检查已有编号，关闭只释放成功项', async () => {
+  const storage = new Map(), app = await createApp({ storage }), links = submissionLinks(100); app.run('openCreate()');
+  await parseLinks(app, links.slice(0, 50)); const first = await submitChosen(app);
+  await parseLinks(app, links.slice(50)); await submitChosen(app); assert.equal(records(app).length, 100);
+  await parseLinks(app, submissionLinks(1, 100)); assert.equal((await submitChosen(app)).length, 0);
+  await checkOriginal(app, first[0].request_id, { status: 'confirmed', task_id: '找到原任务' }); assert.equal(records(app).length, 100);
+  app.node('create-dialog').close(); await app.node('create-dialog').closed; assert.equal(records(app).length, 99);
+  app.run('openCreate()'); await parseLinks(app, submissionLinks(1, 100)); assert.equal((await submitChosen(app)).length, 1);
+  assert.equal(records(app).length, 100); await checkOriginal(app, first[1].request_id);
+});
+
+test('内容相同恢复草稿选择，内容变化清空旧选择', async () => {
+  const storage = new Map(), app = await createApp({ storage }); app.run('openCreate()'); await parseLinks(app, [magnet], () => preview()); await tool(app, '仅选视频').emit('click');
+  const same = await createApp({ storage }); same.run('openCreate()'); await parseLinks(same, [magnet], () => preview());
+  assert.equal(checkbox(same, '影片.mp4').checked, true); assert.equal(checkbox(same, '剧集.mkv').checked, true);
+  const changed = await createApp({ storage }); changed.run('openCreate()'); await parseLinks(changed, [magnet], () => preview(magnet, '新的内容'));
+  assert.equal(checkbox(changed, '影片.mp4').checked, false); assert.match(changed.node('create-results').children[0].children[1].textContent, /内容已变化/);
+});
+
+test('预览过期和存储不可用都不会绕过提交保护', async () => {
+  const storage = { get() {}, set() { throw new Error('存储不可用'); } }, app = await createApp({ storage }); app.run('openCreate()');
+  await parseLinks(app, [magnet], () => preview()); await tool(app, '仅选视频').emit('click'); assert.match(app.node('selection-summary').textContent, /存储不可用/);
+  app.run('entries[0].preview.expires_at = new Date(0).toISOString()'); await app.tick(1000);
+  assert.equal(app.node('create-submit').disabled, true); assert.equal((await submitChosen(app)).length, 0);
+  await parseLinks(app, [magnet], () => preview()); await tool(app, '仅选视频').emit('click'); const sent = await submitChosen(app);
+  await parseLinks(app, [magnet], () => preview()); assert.equal((await submitChosen(app)).length, 0); await checkOriginal(app, sent[0].request_id);
+});
+
+test('旧迅雷包装链接和目录尾斜线迁移后仍只核对', async () => {
+  const link = 'thunder://' + Buffer.from('AA' + magnet + 'ZZ').toString('base64'), state = account();
+  const id = '0123456789abcdef0123456789abcdef';
+  const old = { [JSON.stringify([state.target, state.directory.replace(/\/$/, ''), link])]: { id, done: false } };
+  const storage = new Map([[submissionStorageKey, JSON.stringify(old)]]), app = await createApp({ storage }); app.run('openCreate()');
+  await parseLinks(app, [link], () => preview(magnet)); await tool(app, '仅选视频').emit('click');
+  assert.equal((await submitChosen(app)).length, 0); await checkOriginal(app, id);
+});
+
+test('迟到的新建窗口关闭事件不取消重开后的解析', async () => {
+  const app = await createApp(); app.run('openCreate()'); app.node('links').value = magnet;
+  const pending = app.node('resolve-links').emit('click'), request = app.take('/resources/resolve');
+  await app.node('create-dialog').emit('close'); assert.equal(request.signal.aborted, false);
+  request.respond(preview()); await pending; assert.ok(checkbox(app, '影片.mp4'));
+});
+
+test('旧已确认记录关闭清理前不会变成新的创建请求', async () => {
+ const state=account(), link=submissionLinks(1)[0], id='0123456789abcdef0123456789abcdef';
+ const old={ [JSON.stringify([state.target,state.directory,link])]:{id,done:true} };
+ const app=await createApp({storage:new Map([[submissionStorageKey,JSON.stringify(old)]])});app.run('openCreate()');
+ await parseLinks(app,[link]);assert.equal((await submitChosen(app)).length,0);
+ app.node('create-dialog').close();await app.node('create-dialog').closed;app.run('openCreate()');
+ await parseLinks(app,[link]);assert.equal((await submitChosen(app)).length,1);
 });

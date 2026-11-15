@@ -23,7 +23,7 @@ func blockStateSave(t *testing.T, c *Client) func() {
 
 func copyState(s state) state {
 	s.ReviewCookies = maps.Clone(s.ReviewCookies)
-	s.Submissions = maps.Clone(s.Submissions)
+	s.Submissions = cloneSubmissions(s.Submissions)
 	return s
 }
 
@@ -212,7 +212,7 @@ func Test创建发送前保存失败允许原编号重试(t *testing.T) {
 			if err != nil || saved.Submissions[sampleRequest().RequestID].TaskID != result.ID {
 				t.Fatal("恢复后没有保存任务编号")
 			}
-			if existing && (saved.Submissions["待确认记录"] != before.Submissions["待确认记录"] || saved.Submissions["过期记录"].TaskID != "") {
+			if existing && (!reflect.DeepEqual(saved.Submissions["待确认记录"], before.Submissions["待确认记录"]) || saved.Submissions["过期记录"].TaskID != "") {
 				t.Fatal("成功提交后未保留有效记录或未清理过期记录")
 			}
 		})

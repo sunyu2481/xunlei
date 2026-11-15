@@ -41,6 +41,16 @@ func (f *fakeService) Create(_ context.Context, r remote.CreateRequest) (remote.
 	f.target = r.Target
 	return remote.CreateResult{ID: "任务一"}, f.err
 }
+func (f *fakeService) ResolveResource(_ context.Context, r remote.ResolveRequest) (remote.ResourcePreview, error) {
+	f.calls++
+	f.target = r.Target
+	return remote.ResourcePreview{}, f.err
+}
+func (f *fakeService) CheckSubmission(_ context.Context, target, id string) (remote.SubmissionResult, error) {
+	f.calls++
+	f.target = target
+	return remote.SubmissionResult{RequestID: id, Status: "missing"}, f.err
+}
 func (f *fakeService) TaskAction(_ context.Context, target, id, action string) error {
 	f.calls++
 	f.target = target

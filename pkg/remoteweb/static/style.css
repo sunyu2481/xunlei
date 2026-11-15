@@ -90,7 +90,23 @@ textarea { resize: vertical; min-height: 120px; }
 .folder-row svg { color: #97b6dd; }
 .folder-row:hover { background: #f3f7fe; }
 .folders .muted { text-align: center; padding: 70px 15px; }
-.create-results { max-height: 190px; overflow: auto; }
+.create-results { max-height: 48vh; overflow: auto; margin-top: 14px; }
+.resolve-actions, .resource-tools { display: flex; flex-wrap: wrap; gap: 7px; margin: 10px 0; }
+.resource-card { border: 1px solid var(--line); border-radius: 4px; padding: 12px; margin-bottom: 12px; }
+.resource-card h2 { font-size: 14px; margin: 10px 0 4px; overflow-wrap: anywhere; }
+.resource-card > input { font-size: 12px; }
+.resource-tools button, .resource-tools select { padding: 4px 8px; width: auto; font-size: 12px; }
+.resource-status { font-size: 12px; color: #888; overflow-wrap: anywhere; }
+.file-tree { max-height: 280px; overflow: auto; border-top: 1px solid var(--line); }
+.file-row { display: flex; gap: 8px; align-items: center; min-height: 34px; padding: 4px 0; }
+.file-row input { width: 15px; height: 15px; padding: 0; margin: 0; flex-shrink: 0; accent-color: var(--blue); }
+.file-name { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.file-size { color: #999; font-size: 12px; white-space: nowrap; }
+.file-children { padding-left: 16px; }
+.submission-history { max-height: 160px; overflow: auto; }
+.history-row { padding: 9px 0; border-bottom: 1px solid var(--line); font-size: 12px; overflow-wrap: anywhere; }
+.history-row button { margin: 6px 6px 0 0; padding: 3px 8px; }
+#create-dialog { width: 780px; }
 .result { display: flex; gap: 15px; padding: 8px 0; border-bottom: 1px solid var(--line); font-size: 12px; }
 .result span:first-child { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #999; }
 .result span:last-child { max-width: 65%; overflow-wrap: anywhere; }

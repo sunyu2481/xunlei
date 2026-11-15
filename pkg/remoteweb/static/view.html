@@ -93,11 +93,14 @@
     <div class="dialog-header"><h1 id="create-title">新建下载任务</h1><button class="close" data-close aria-label="关闭新建下载">×</button></div>
     <form id="create-form" class="dialog-body">
       <label for="links">下载链接</label><textarea id="links" placeholder="支持磁力链接、迅雷链接和下载直链，每行一条" rows="6" required></textarea>
-      <p class="muted compact">每批最多 50 条，任务将逐条提交到 <strong id="create-device"></strong></p>
+      <p class="muted compact">每批最多 50 条，先解析并选择文件，再提交到 <strong id="create-device"></strong></p>
+      <div class="resolve-actions"><button type="button" id="resolve-links">解析链接</button><button type="button" id="cancel-resolve" hidden>取消解析</button></div>
       <label for="create-directory">保存位置</label><div class="input-row"><input id="create-directory" readonly placeholder="请选择设备上的下载目录"><button type="button" id="create-browse">选择目录</button></div>
       <p id="create-message" class="form-message" role="status"></p>
       <div id="create-results" class="create-results" aria-live="polite"></div>
-      <div class="dialog-actions"><button type="button" data-close>关闭</button><button type="submit" class="primary" id="create-submit">立即下载</button></div>
+      <p id="selection-summary" class="muted compact" role="status"></p>
+      <div id="submission-history" class="submission-history" aria-live="polite"></div>
+      <div class="dialog-actions"><button type="button" data-close>关闭</button><button type="submit" class="primary" id="create-submit" disabled>下载所选文件</button></div>
     </form>
   </dialog>
 </body>

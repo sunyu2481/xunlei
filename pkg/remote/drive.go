@@ -33,6 +33,7 @@ type Task struct {
 	Directory string  `json:"directory"`
 	URL       string  `json:"url"`
 	createdAt int64
+	selection string
 }
 type TaskPage struct {
 	Tasks         []Task `json:"tasks"`
@@ -43,10 +44,14 @@ type Settings struct {
 	Directory string `json:"directory"`
 }
 type CreateRequest struct {
-	RequestID string `json:"request_id"`
-	Target    string `json:"target"`
-	Directory string `json:"directory"`
-	URL       string `json:"url"`
+	RequestID       string  `json:"request_id"`
+	Target          string  `json:"target"`
+	Directory       string  `json:"directory"`
+	URL             string  `json:"url"`
+	PreviewID       string  `json:"preview_id,omitempty"`
+	ResourceVersion string  `json:"resource_version,omitempty"`
+	SelectionMode   string  `json:"selection_mode,omitempty"`
+	FileIndices     []int64 `json:"file_indices,omitempty"`
 }
 type CreateResult struct {
 	ID     string `json:"id"`
@@ -403,7 +408,7 @@ func (c *Client) taskPage(ctx context.Context, target, page string) (TaskPage, e
 			createdAt /= 1000
 		}
 		out.Tasks = append(out.Tasks, Task{ID: str(t["id"]), Type: kind, Name: first(str(t["name"]), str(t["file_name"]), "未命名任务"),
-			Phase: str(t["phase"]), Progress: progress, Size: size, Done: done, Speed: speed, Directory: str(p["parent_folder_path"]), URL: str(p["url"]), createdAt: createdAt})
+			Phase: str(t["phase"]), Progress: progress, Size: size, Done: done, Speed: speed, Directory: str(p["parent_folder_path"]), URL: str(p["url"]), createdAt: createdAt, selection: str(p["sub_file_index"])})
 	}
 	return out, nil
 }
@@ -482,6 +487,12 @@ func (c *Client) reconcile(ctx context.Context, s submission) string {
 		for _, t := range p.Tasks {
 			// 窗口固定在原提交时刻附近，不能随重试时间延长。
 			if t.URL == s.URL && path.Clean(t.Directory) == path.Clean(s.Directory) && t.createdAt >= s.At-5 && t.createdAt <= s.At+60 {
+				if t.ID == "" {
+					return ""
+				}
+				if !selectionEvidence(s, t.selection) {
+					return ""
+				}
 				if matched != "" && matched != t.ID {
 					return ""
 				}
@@ -519,8 +530,24 @@ func (c *Client) Create(ctx context.Context, req CreateRequest) (CreateResult, e
 	if err != nil {
 		return CreateResult{}, err
 	}
+	indices, err := normalizeSelection(req.SelectionMode, req.FileIndices)
+	if err != nil {
+		return CreateResult{}, err
+	}
 	fingerprint := md5hex(req.Target + "\n" + directory + "\n" + link)
+	newFormat := req.PreviewID != "" || req.ResourceVersion != "" || req.SelectionMode != "" || req.FileIndices != nil
 	if old, ok := c.snapshot().Submissions[req.RequestID]; ok {
+		if old.Version != 0 && old.Version != 2 {
+			return CreateResult{}, failure("invalid_request", "提交记录版本不受支持，请保留记录并升级程序")
+		}
+		if old.Version == 2 {
+			fingerprint = selectionFingerprint(req.Target, directory, link, req.SelectionMode, req.ResourceVersion, indices)
+			if old.Account != c.snapshot().Username {
+				return CreateResult{}, failure("preview_mismatch", "提交记录与当前账号不一致")
+			}
+		} else if newFormat {
+			return CreateResult{}, failure("invalid_request", "旧请求编号只能核对原提交，请使用检查提交结果入口")
+		}
 		if old.Fingerprint != fingerprint {
 			return CreateResult{}, failure("invalid_request", "重复请求的内容发生变化，请重新新建任务")
 		}
@@ -536,21 +563,72 @@ func (c *Client) Create(ctx context.Context, req CreateRequest) (CreateResult, e
 		}
 		return CreateResult{}, failure("submission_unknown", "此前提交结果仍未确认，请在任务列表或迅雷客户端核对；本次未重复提交")
 	}
-	folder, err := c.resolve(ctx, req.Target, directory)
-	if err != nil {
+	var resource *resourceSnapshot
+	var folder Folder
+	if newFormat {
+		if req.PreviewID == "" || req.ResourceVersion == "" || (req.SelectionMode != "files" && req.SelectionMode != "single") {
+			return CreateResult{}, failure("invalid_selection", "请使用完整资源预览并明确选择下载文件")
+		}
+		resource, err = c.validatePreview(req, link)
+		if err != nil {
+			return CreateResult{}, err
+		}
+	} else {
+		if isMagnetLink(link) {
+			return CreateResult{}, failure("selection_required", "磁力链接需要先解析并选择文件，请刷新页面")
+		}
+		folder, err = c.resolve(ctx, req.Target, directory)
+		if err != nil {
+			return CreateResult{}, err
+		}
+		resource, err = c.parseResource(ctx, req.Target, link)
+		if err != nil {
+			return CreateResult{}, err
+		}
+		if resource.preview.Kind != "single" {
+			return CreateResult{}, failure("selection_required", "此链接需要先解析并选择文件，请刷新页面")
+		}
+	}
+	var selectedSize int64
+	if resource.preview.Kind == "single" {
+		selectedSize, _ = strconv.ParseInt(resource.preview.TotalSize, 10, 64)
+	} else {
+		for _, index := range indices {
+			size, exists := resource.indices[index]
+			if !exists {
+				return CreateResult{}, failure("invalid_selection", "所选文件索引不属于此资源，请重新选择")
+			}
+			if size > math.MaxInt64-selectedSize {
+				return CreateResult{}, failure("invalid_selection", "所选文件大小溢出")
+			}
+			selectedSize += size
+		}
+	}
+	if newFormat {
+		folder, err = c.resolve(ctx, req.Target, directory)
+		if err != nil {
+			return CreateResult{}, err
+		}
+	}
+	if err = ctx.Err(); err != nil {
 		return CreateResult{}, err
 	}
-	d, err := c.request(ctx, "POST", driveURL+"/resource/list", nil, object{"page_size": 2000, "urls": link})
-	if err != nil {
-		return CreateResult{}, err
+	if newFormat {
+		if _, err = c.validatePreview(req, link); err != nil {
+			return CreateResult{}, err
+		}
 	}
-	resources := items(obj(d["list"])["resources"])
-	if len(resources) == 0 {
-		return CreateResult{}, failure("invalid_request", "迅雷未能解析此链接，请检查链接内容")
+	name := resource.preview.Name
+	count := strconv.Itoa(resource.preview.TotalFileCount)
+	intent := submission{Fingerprint: fingerprint, Target: req.Target, URL: link, Directory: folder.Path, At: time.Now().Unix()}
+	if newFormat {
+		intent.Version = 2
+		intent.Account = c.snapshot().Username
+		intent.SelectionMode = req.SelectionMode
+		intent.ResourceVersion = req.ResourceVersion
+		intent.FileIndices = indices
+		intent.Fingerprint = selectionFingerprint(req.Target, directory, link, req.SelectionMode, req.ResourceVersion, indices)
 	}
-	r := obj(resources[0])
-	name := first(str(r["name"]), str(r["file_name"]), "新建下载")
-	count := first(str(r["file_count"]), "1")
 	// 在发送前落盘，进程退出或响应丢失后仍能识别同一次提交。
 	if err = c.updateAndSave(func(s *state) error {
 		c.pruneSubmissions(s)
@@ -560,15 +638,19 @@ func (c *Client) Create(ctx context.Context, req CreateRequest) (CreateResult, e
 		if s.Submissions == nil {
 			s.Submissions = map[string]submission{}
 		}
-		s.Submissions[req.RequestID] = submission{Fingerprint: fingerprint, Target: req.Target, URL: link, Directory: folder.Path, At: time.Now().Unix()}
+		s.Submissions[req.RequestID] = intent
 		return nil
 	}); err != nil {
 		return CreateResult{}, err
 	}
-	body := object{"type": "user#download-url", "name": name, "file_name": name, "file_size": first(str(r["file_size"]), "0"), "space": req.Target,
+	subFileIndex := ""
+	if resource.preview.Kind == "files" {
+		subFileIndex = encodeIndices(indices)
+	}
+	body := object{"type": "user#download-url", "name": name, "file_name": name, "file_size": strconv.FormatInt(selectedSize, 10), "space": req.Target,
 		"params": object{"target": req.Target, "url": link, "total_file_count": count, "parent_folder_path": strings.TrimRight(folder.Path, "/") + "/", "parent_folder_id": folder.ID,
-			"sub_file_index": "--1,", "mime_type": str(r["mime_type"]), "file_id": str(r["file_id"])}}
-	d, err = c.request(ctx, "POST", driveURL+"/task", nil, body)
+			"sub_file_index": subFileIndex, "mime_type": resource.mimeType, "file_id": resource.fileID}}
+	d, err := c.request(ctx, "POST", driveURL+"/task", nil, body)
 	if err != nil {
 		var e *Error
 		if errors.As(err, &e) && e.Kind != "network" && e.Kind != "device_unavailable" && (e.Kind != "upstream" || e.RemoteCode != 0) {

@@ -30,6 +30,8 @@ type Service interface {
 	Folders(context.Context, string, string) ([]remote.Folder, error)
 	Tasks(context.Context, string, string) (remote.TaskPage, error)
 	Create(context.Context, remote.CreateRequest) (remote.CreateResult, error)
+	ResolveResource(context.Context, remote.ResolveRequest) (remote.ResourcePreview, error)
+	CheckSubmission(context.Context, string, string) (remote.SubmissionResult, error)
 	TaskAction(context.Context, string, string, string) error
 }
 
@@ -97,10 +99,20 @@ func New(service Service) http.Handler {
 	})
 	register("POST /api/remote/tasks", func(w http.ResponseWriter, r *http.Request) (any, error) {
 		var body remote.CreateRequest
-		if err := decode(w, r, &body); err != nil {
+		if err := decodeLimit(w, r, &body, 128<<10); err != nil {
 			return nil, err
 		}
 		return service.Create(r.Context(), body)
+	})
+	register("POST /api/remote/resources/resolve", func(w http.ResponseWriter, r *http.Request) (any, error) {
+		var body remote.ResolveRequest
+		if err := decode(w, r, &body); err != nil {
+			return nil, err
+		}
+		return service.ResolveResource(r.Context(), body)
+	})
+	register("GET /api/remote/submissions/{request_id}", func(w http.ResponseWriter, r *http.Request) (any, error) {
+		return service.CheckSubmission(r.Context(), r.URL.Query().Get("target"), r.PathValue("request_id"))
 	})
 	register("POST /api/remote/tasks/{id}/{action}", func(w http.ResponseWriter, r *http.Request) (any, error) {
 		var body struct {
@@ -126,7 +138,10 @@ func New(service Service) http.Handler {
 }
 
 func decode(w http.ResponseWriter, r *http.Request, out any) error {
-	r.Body = http.MaxBytesReader(w, r.Body, 32<<10)
+	return decodeLimit(w, r, out, 32<<10)
+}
+func decodeLimit(w http.ResponseWriter, r *http.Request, out any, limit int64) error {
+	r.Body = http.MaxBytesReader(w, r.Body, limit)
 	dec := json.NewDecoder(r.Body)
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(out); err != nil {
@@ -156,15 +171,15 @@ func writeError(w http.ResponseWriter, err error) {
 		}
 	}
 	switch e.Kind {
-	case "invalid_request", "directory_required", "device_required":
+	case "invalid_request", "directory_required", "device_required", "invalid_selection", "selection_required":
 		status = 400
 	case "forbidden":
 		status = 403
 	case "not_found":
 		status = 404
-	case "settings_changed", "submission_unknown":
+	case "settings_changed", "submission_unknown", "preview_expired", "preview_mismatch":
 		status = 409
-	case "login_required", "review_required", "review_expired", "captcha_required", "verification_required":
+	case "login_required", "review_required", "review_expired", "captcha_required", "verification_required", "resource_unavailable", "resource_incomplete", "resource_too_large":
 		status = 422
 	case "rate_limited":
 		status = 429

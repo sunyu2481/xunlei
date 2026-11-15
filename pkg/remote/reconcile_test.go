@@ -241,7 +241,7 @@ func Test提交记录新编号成功保存时清理(t *testing.T) {
 		t.Fatalf("新编号恢复后未成功提交：%+v，%v", result, err)
 	}
 	saved, err := readState(c.path)
-	if err != nil || !reflect.DeepEqual(saved, c.snapshot()) || len(saved.Submissions) != 2 || saved.Submissions["七天内的记录"] != recent || saved.Submissions[sampleRequest().RequestID].TaskID != result.ID {
+	if err != nil || !reflect.DeepEqual(saved, c.snapshot()) || len(saved.Submissions) != 2 || !reflect.DeepEqual(saved.Submissions["七天内的记录"], recent) || saved.Submissions[sampleRequest().RequestID].TaskID != result.ID {
 		t.Fatal("成功保存新编号后未清理过期记录或丢失了有效记录")
 	}
 }
