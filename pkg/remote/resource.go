@@ -160,12 +160,29 @@ type resourcePage struct {
 	depth         int
 	seen          map[string]bool
 }
+
+type resourceParentRef struct {
+	node, parent string
+}
+
 type resourceBuilder struct {
-	nodes   map[string]ResourceFile
-	counts  map[string]int64
-	pages   []resourcePage
-	indices map[int64]int64
-	roots   []string
+	nodes      map[string]ResourceFile
+	counts     map[string]int64
+	pages      []resourcePage
+	indices    map[int64]int64
+	roots      []string
+	parentRefs map[resourceParentRef]struct{}
+}
+
+func (b *resourceBuilder) hasAncestor(nodeID, parentID string) bool {
+	node := b.nodes[nodeID]
+	for depth := 0; depth < maxResourceDepth && node.ParentID != ""; depth++ {
+		if node.ParentID == parentID {
+			return true
+		}
+		node = b.nodes[node.ParentID]
+	}
+	return false
 }
 
 func (b *resourceBuilder) add(resources []any, parent string, depth int, single bool) error {
@@ -187,8 +204,13 @@ func (b *resourceBuilder) add(resources []any, parent string, depth int, single 
 		if id == "" {
 			return resourceError("资源节点缺少标识")
 		}
+		// 本地父级由返回树及分页所属目录确定。上游标识可能属于列表外部，
+		// 必须等所有分页加载完成，再判断它是否指向树内的错误父级。
 		if p := str(r["parent_id"]); p != "" && p != parent {
-			return resourceError("目录与父级关系不一致")
+			if b.parentRefs == nil {
+				b.parentRefs = make(map[resourceParentRef]struct{})
+			}
+			b.parentRefs[resourceParentRef{node: id, parent: p}] = struct{}{}
 		}
 		isDir := false
 		if v, present := r["is_dir"]; present {
@@ -350,6 +372,14 @@ func (c *Client) parseResource(ctx context.Context, target, link string) (*resou
 	}
 	if len(b.roots) != 1 {
 		return nil, resourceError("链接未对应唯一根资源")
+	}
+	for ref := range b.parentRefs {
+		if _, internal := b.nodes[ref.parent]; internal && !b.hasAncestor(ref.node, ref.parent) {
+			if b.nodes[ref.node].ParentID == "" {
+				return nil, resourceError("根资源的父级指向列表内部节点")
+			}
+			return nil, resourceError("目录与树内父级关系不一致")
+		}
 	}
 	p := &resourceSnapshot{indices: b.indices, mimeType: str(root["mime_type"]), fileID: str(root["file_id"])}
 	p.preview = ResourcePreview{PreviewID: randomID(), URL: link, Target: target, Kind: "files", Name: b.nodes[b.roots[0]].Name, Complete: true, ExpiresAt: time.Now().Add(previewLifetime), Files: []ResourceFile{}}

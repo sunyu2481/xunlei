@@ -123,7 +123,7 @@ func Test资源异常不发放预览(t *testing.T) {
 		{"非法分页令牌", func(r object) { obj(r["dir"])["next_page_token"] = []any{"页"} }, "resource_incomplete"},
 		{"资源错误", func(r object) { r["meta"] = object{"error": "上游私人内容"} }, "resource_unavailable"},
 		{"节点冲突", func(r object) { children := items(obj(r["dir"])["resources"]); obj(children[3])["id"] = "零" }, "resource_incomplete"},
-		{"父编号错误", func(r object) { obj(items(obj(r["dir"])["resources"])[0])["parent_id"] = "其他目录" }, "resource_incomplete"},
+		{"树内跨目录父级", func(r object) { obj(items(obj(r["dir"])["resources"])[0])["parent_id"] = "子目录" }, "resource_incomplete"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			r := testResource()
@@ -179,6 +179,112 @@ func Test资源计数只核对根摘要(t *testing.T) {
 			}
 			if _, err = c.Create(context.Background(), selectedRequest(p, 0, 2, 3)); err != nil || created != 1 {
 				t.Fatalf("显式选择创建失败：%v", err)
+			}
+		})
+	}
+}
+
+func Test外部父级标识按返回树归一化(t *testing.T) {
+	var version string
+	for _, scope := range []string{"", "0", "临时列表父级甲", "临时列表父级乙", "树内祖先"} {
+		t.Run(scope, func(t *testing.T) {
+			r := testResource()
+			if scope != "" {
+				if scope != "树内祖先" {
+					r["parent_id"] = scope
+				}
+				var rewrite func(object)
+				rewrite = func(node object) {
+					for _, value := range items(obj(node["dir"])["resources"]) {
+						child := obj(value)
+						if scope == "树内祖先" {
+							child["parent_id"] = "资料包"
+						} else {
+							child["parent_id"] = scope + "/" + str(child["parent_id"])
+						}
+						rewrite(child)
+					}
+				}
+				rewrite(r)
+			}
+			created := 0
+			c := resourceClient(t, r, func(w http.ResponseWriter, req *http.Request) bool {
+				if req.URL.Path != "/drive/v1/task" {
+					return false
+				}
+				created++
+				params := obj(bodyOf(t, req)["params"])
+				if params["sub_file_index"] != "0,2-3" || params["parent_folder_path"] != "/downloads/电影/" {
+					t.Fatal("外部资源父级改变了选择或下载目录")
+				}
+				respond(w, object{"task": object{"id": "已选择任务"}})
+				return true
+			})
+			p, err := c.ResolveResource(context.Background(), ResolveRequest{Target: "设备一", URL: testMagnet})
+			if err != nil {
+				t.Fatalf("外部父级不应被判作树内冲突：%v", err)
+			}
+			if created != 0 || len(c.snapshot().Submissions) != 0 {
+				t.Fatal("解析触发了任务创建")
+			}
+			for _, file := range p.Files {
+				wantParent := "资料包"
+				if file.ID == "资料包" {
+					wantParent = ""
+				}
+				if file.ID == "二" || file.ID == "三" {
+					wantParent = "子目录"
+				}
+				if file.ParentID != wantParent {
+					t.Fatalf("节点 %s 没有使用返回树父级", file.ID)
+				}
+			}
+			if version != "" && version != p.ResourceVersion {
+				t.Fatal("临时外部父标识改变了资源内容版本")
+			}
+			version = p.ResourceVersion
+			if _, err = c.Create(context.Background(), selectedRequest(p, 0, 2, 3)); err != nil || created != 1 {
+				t.Fatalf("显式选择创建失败：%v", err)
+			}
+		})
+	}
+}
+
+func Test父级校验等待完整分页并拒绝树内冲突(t *testing.T) {
+	for _, mode := range []string{"外部父级", "后续节点冲突", "根指向叶子", "自引用"} {
+		t.Run(mode, func(t *testing.T) {
+			r := resourceDir("根", "列表父级", 2, resourceLeaf("甲", "列表父级/根", "文件甲", 0, 10))
+			obj(r["dir"])["next_page_token"] = "后续目录页"
+			switch mode {
+			case "后续节点冲突":
+				obj(items(obj(r["dir"])["resources"])[0])["parent_id"] = "乙"
+			case "根指向叶子":
+				r["parent_id"] = "乙"
+			case "自引用":
+				r["parent_id"] = "根"
+			}
+			pages := 0
+			c := resourceClient(t, r, func(w http.ResponseWriter, req *http.Request) bool {
+				if !strings.HasPrefix(req.URL.Path, "/drive/v1/resource/list/") {
+					return false
+				}
+				pages++
+				respond(w, object{"list": object{"resources": []any{resourceLeaf("乙", "分页外部父级", "文件乙", 7, 20)}}})
+				return true
+			})
+			p, err := c.ResolveResource(context.Background(), ResolveRequest{Target: "设备一", URL: testMagnet})
+			if mode == "外部父级" {
+				if err != nil || p.TotalFileCount != 2 || p.TotalSize != "30" {
+					t.Fatalf("分页归属错误：%+v %v", p, err)
+				}
+			} else {
+				wantKind(t, err, "resource_incomplete")
+				if len(c.previews) != 0 {
+					t.Fatal("树内父级冲突仍发放预览")
+				}
+			}
+			if pages != 1 || len(c.snapshot().Submissions) != 0 {
+				t.Fatal("没有完整读取分页，或解析新增了提交记录")
 			}
 		})
 	}
